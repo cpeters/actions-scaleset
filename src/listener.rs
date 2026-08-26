@@ -145,18 +145,23 @@ impl<S: SessionApi> Listener<S> {
         if initial.session_id == Uuid::nil() {
             return Err(Error::message("initial session is nil"));
         }
+
         let stats = initial
             .statistics
             .clone()
             .ok_or_else(|| Error::message("session statistics is nil"))?;
-        self.store_statistics(&stats);
+
+        self.store_statistics(&stats)?;
+
         tracing::info!(
             total_assigned_jobs = stats.total_assigned_jobs,
             "handling initial session statistics"
         );
+
         let desired = scaler
             .handle_desired_runner_count(stats.total_assigned_jobs)
             .await?;
+
         self.metrics.record_desired_runners(desired);
 
         let mut last_message_id = 0i32;
@@ -193,13 +198,17 @@ impl<S: SessionApi> Listener<S> {
 
             match msg {
                 None => {
-                    let assigned = self
-                        .latest_statistics
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.clone())
-                        .map(|s| s.total_assigned_jobs)
-                        .unwrap_or(0);
+                    let assigned = {
+                        let stats = self
+                            .latest_statistics
+                            .lock()
+                            .map_err(|_| Error::message("latest statistics lock poisoned"))?;
+
+                        stats
+                            .as_ref()
+                            .ok_or_else(|| Error::message("latest statistics is nil"))?
+                            .total_assigned_jobs
+                    };
                     scaler.handle_desired_runner_count(assigned).await?;
                 }
                 Some(msg) => {
@@ -212,7 +221,7 @@ impl<S: SessionApi> Listener<S> {
 
     async fn handle_message(&self, scaler: &dyn Scaler, msg: RunnerScaleSetMessage) -> Result<()> {
         if let Some(stats) = &msg.statistics {
-            self.store_statistics(stats);
+            self.store_statistics(stats)?;
         }
 
         match self.ack_mode {
@@ -281,11 +290,17 @@ impl<S: SessionApi> Listener<S> {
         Ok(())
     }
 
-    fn store_statistics(&self, stats: &RunnerScaleSetStatistic) {
+    fn store_statistics(&self, stats: &RunnerScaleSetStatistic) -> Result<()> {
         self.metrics.record_statistics(stats);
-        if let Ok(mut g) = self.latest_statistics.lock() {
-            *g = Some(stats.clone());
-        }
+
+        let mut stored = self
+            .latest_statistics
+            .lock()
+            .map_err(|_| Error::message("latest statistics lock poisoned"))?;
+
+        *stored = Some(stats.clone());
+
+        Ok(())
     }
 }
 
