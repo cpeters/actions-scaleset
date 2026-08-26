@@ -31,6 +31,13 @@ pub enum Error {
     #[error(transparent)]
     Kind(#[from] Kind),
 
+    #[error("{kind}: {source}")]
+    Classified {
+        kind: Kind,
+        #[source]
+        source: Box<Error>,
+    },
+
     #[error("{0}")]
     Message(String),
 
@@ -74,6 +81,10 @@ impl Error {
     pub fn has_kind(&self, kind: Kind) -> bool {
         match self {
             Self::Kind(k) => *k == kind,
+            Self::Classified {
+                kind: k,
+                source,
+            } => *k == kind || source.has_kind(kind),
             Self::Http {
                 source: Some(inner),
                 ..
@@ -129,85 +140,107 @@ pub(crate) fn map_response_error(
     }
     message.push(')');
 
-    let inner = if body.is_empty() {
-        seed.map(Error::from)
-            .unwrap_or_else(|| Error::message(format!("{message}: unknown error")))
-    } else if let Some(kind) = seed {
-        Error::Message(format!("{message}: {kind}: {}", String::from_utf8_lossy(body)))
-    } else if content_type.is_some_and(|ct| ct.contains("text/plain")) {
-        Error::Message(format!("{message}: {}", String::from_utf8_lossy(body)))
-    } else if let Ok(exception) = serde_json::from_slice::<ActionsException>(body) {
-        let kind = if exception.type_name.contains("AgentExistsException") {
-            Some(Kind::RunnerExists)
-        } else if exception.type_name.contains("AgentNotFoundException") {
-            Some(Kind::RunnerNotFound)
-        } else if exception.type_name.contains("JobStillRunningException") {
-            Some(Kind::JobStillRunning)
-        } else {
-            None
-        };
-        match kind {
-            Some(k) => Error::Message(format!("{message}: {k}: {}", exception.message)),
-            None => Error::Message(format!("{message}: {exception}")),
-        }
-    } else {
-        Error::Message(format!(
-            "{message}: failed to unmarshal error response body: {:?}",
-            String::from_utf8_lossy(body)
-        ))
-    };
+	let inner = if body.is_empty() {
+		seed.map(Error::from)
+			.unwrap_or_else(|| Error::message(format!("{message}: unknown error")))
+	} else if let Some(kind) = seed {
+		Error::Classified {
+			kind,
+			source: Box::new(Error::message(format!(
+				"{message}: {}",
+				String::from_utf8_lossy(body)
+			))),
+		}
+	} else if content_type.is_some_and(|ct| ct.contains("text/plain")) {
+		Error::Message(format!("{message}: {}", String::from_utf8_lossy(body)))
+	} else if let Ok(exception) = serde_json::from_slice::<ActionsException>(body) {
+		let kind = if exception.type_name.contains("AgentExistsException") {
+			Some(Kind::RunnerExists)
+		} else if exception.type_name.contains("AgentNotFoundException") {
+			Some(Kind::RunnerNotFound)
+		} else if exception.type_name.contains("JobStillRunningException") {
+			Some(Kind::JobStillRunning)
+		} else {
+			None
+		};
 
-    let wrapped_kind = match status {
-        StatusCode::BAD_REQUEST => Some(Kind::BadRequest),
-        StatusCode::UNAUTHORIZED => Some(Kind::Unauthorized),
-        StatusCode::NOT_FOUND => Some(Kind::NotFound),
-        StatusCode::CONFLICT => Some(Kind::Conflict),
-        _ => None,
-    };
+		match kind {
+			Some(kind) => Error::Classified {
+				kind,
+				source: Box::new(Error::message(format!(
+					"{message}: {}",
+					exception.message
+				))),
+			},
+			None => Error::Message(format!("{message}: {exception}")),
+		}
+	} else {
+		Error::Message(format!(
+			"{message}: failed to unmarshal error response body: {:?}",
+			String::from_utf8_lossy(body)
+		))
+	};
 
-    let mut err = Error::Http {
-        status: status.as_u16(),
-        message,
-        activity_id,
-        github_request_id,
-        source: Some(Box::new(inner)),
-    };
+	let wrapped_kind = match status {
+		StatusCode::BAD_REQUEST => Some(Kind::BadRequest),
+		StatusCode::UNAUTHORIZED => Some(Kind::Unauthorized),
+		StatusCode::NOT_FOUND => Some(Kind::NotFound),
+		StatusCode::CONFLICT => Some(Kind::Conflict),
+		_ => None,
+	};
 
-    if let Some(kind) = seed.filter(|k| *k == Kind::MessageQueueTokenExpired) {
-        // Preserve the token-expired sentinel so callers can refresh the session.
-        err = Error::Http {
-            status: status.as_u16(),
-            message: err.to_string(),
-            activity_id: match &err {
-                Error::Http { activity_id, .. } => activity_id.clone(),
-                _ => None,
-            },
-            github_request_id: match &err {
-                Error::Http {
-                    github_request_id, ..
-                } => github_request_id.clone(),
-                _ => None,
-            },
-            source: Some(Box::new(Error::Kind(kind))),
-        };
-    } else if let Some(kind) = wrapped_kind {
-        err = Error::Http {
-            status: status.as_u16(),
-            message: err.to_string(),
-            activity_id: match &err {
-                Error::Http { activity_id, .. } => activity_id.clone(),
-                _ => None,
-            },
-            github_request_id: match &err {
-                Error::Http {
-                    github_request_id, ..
-                } => github_request_id.clone(),
-                _ => None,
-            },
-            source: Some(Box::new(Error::Kind(kind))),
-        };
-    }
+	let inner = match wrapped_kind {
+		Some(kind) => Error::Classified {
+			kind,
+			source: Box::new(inner),
+		},
+		None => inner,
+	};
 
-    err
+	Error::Http {
+		status: status.as_u16(),
+		message,
+		activity_id,
+		github_request_id,
+		source: Some(Box::new(inner)),
+	}
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_exception_preserves_specific_and_http_kinds() {
+        let err = map_response_error(
+            StatusCode::CONFLICT,
+            None,
+            None,
+            Some("application/json"),
+            br#"{"typeName":"AgentExistsException","message":"runner already exists"}"#,
+            "POST",
+            "https://example.test",
+            None,
+        );
+
+        assert!(err.has_kind(Kind::RunnerExists));
+        assert!(err.has_kind(Kind::Conflict));
+    }
+
+    #[test]
+    fn token_expired_preserves_token_and_http_kinds() {
+        let err = map_response_error(
+            StatusCode::UNAUTHORIZED,
+            None,
+            None,
+            Some("text/plain"),
+            b"token expired",
+            "GET",
+            "https://example.test",
+            Some(Kind::MessageQueueTokenExpired),
+        );
+
+        assert!(err.has_kind(Kind::MessageQueueTokenExpired));
+        assert!(err.has_kind(Kind::Unauthorized));
+    }
+}
