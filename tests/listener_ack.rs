@@ -139,6 +139,23 @@ fn listener(mode: AckMode, trace: Arc<Trace>) -> Listener<MockSession> {
     .unwrap()
 }
 
+#[test]
+fn set_max_runners_rejects_negative_values() {
+    let trace = Arc::new(Trace::default());
+    let listener = listener(AckMode::AfterProcess, trace);
+
+    assert!(listener.set_max_runners(-1).is_err());
+}
+
+#[test]
+fn set_max_runners_accepts_non_negative_values() {
+    let trace = Arc::new(Trace::default());
+    let listener = listener(AckMode::AfterProcess, trace);
+
+    assert!(listener.set_max_runners(0).is_ok());
+    assert!(listener.set_max_runners(10).is_ok());
+}
+
 #[tokio::test]
 async fn after_process_deletes_last() {
     let trace = Arc::new(Trace::default());

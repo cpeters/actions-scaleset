@@ -112,8 +112,13 @@ impl<S: SessionApi> Listener<S> {
         self
     }
 
-    pub fn set_max_runners(&self, count: i32) {
+    pub fn set_max_runners(&self, count: i32) -> Result<()> {
+        if count < 0 {
+            return Err(Error::message("maxRunners must be >= 0"));
+        }
         self.max_runners.store(count, Ordering::SeqCst);
+
+        Ok(())
     }
 
     /// Process a single already-fetched message (used by tests and custom loops).
