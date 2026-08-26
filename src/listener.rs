@@ -217,8 +217,9 @@ impl<S: SessionApi> Listener<S> {
                     scaler.handle_desired_runner_count(assigned).await?;
                 }
                 Some(msg) => {
-                    last_message_id = msg.message_id;
+                    let message_id = msg.message_id;
                     self.handle_message(scaler, msg).await?;
+                    last_message_id = message_id;
                 }
             }
         }
