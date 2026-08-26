@@ -64,9 +64,25 @@ impl ListenerConfig {
 
 #[async_trait]
 pub trait Scaler: Send + Sync {
+    /// Observe that GitHub reported a job as started.
+    ///
+    /// Implementations must be idempotent because messages may be redelivered.
     async fn handle_job_started(&self, job: &JobStarted) -> Result<()>;
+
+    /// Observe that GitHub reported a job as completed.
+    ///
+    /// This is a lifecycle signal, not proof that the backing runner is safe
+    /// to destroy. Implementations should reconcile runner state before
+    /// performing destructive cleanup.
+    ///
+    /// This callback may also be invoked more than once because queue
+    /// processing uses at-least-once delivery semantics.
     async fn handle_job_completed(&self, job: &JobCompleted) -> Result<()>;
-    /// Return the runner count actually applied.
+
+    /// Reconcile to the desired runner count and return the count actually applied.
+    ///
+    /// Implementations must be idempotent because an unacknowledged message may
+    /// be redelivered after partial processing.
     async fn handle_desired_runner_count(&self, count: i32) -> Result<i32>;
 }
 
