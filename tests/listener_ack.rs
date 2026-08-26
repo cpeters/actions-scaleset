@@ -211,3 +211,73 @@ async fn go_compat_deletes_before_acquire() {
     assert_eq!(calls.first().map(String::as_str), Some("delete:99"));
     assert!(calls.iter().any(|c| c.starts_with("acquire:")));
 }
+
+struct BlockingSession {
+    session: RunnerScaleSetSession,
+}
+
+#[async_trait]
+impl SessionApi for BlockingSession {
+    async fn get_message(
+        &self,
+        _last_message_id: i32,
+        _max_capacity: i32,
+    ) -> Result<Option<RunnerScaleSetMessage>> {
+        std::future::pending().await
+    }
+
+    async fn delete_message(&self, _message_id: i32) -> Result<()> {
+        Ok(())
+    }
+
+    async fn acquire_jobs(&self, _request_ids: &[i64]) -> Result<Vec<i64>> {
+        Ok(vec![])
+    }
+
+    async fn session(&self) -> RunnerScaleSetSession {
+        self.session.clone()
+    }
+}
+
+#[tokio::test]
+async fn run_until_interrupts_pending_get_message() {
+    let trace = Arc::new(Trace::default());
+
+    let session = RunnerScaleSetSession {
+        session_id: Uuid::new_v4(),
+        statistics: Some(RunnerScaleSetStatistic::default()),
+        ..Default::default()
+    };
+
+    let listener = Listener::new(
+        BlockingSession { session },
+        ListenerConfig {
+            scale_set_id: 1,
+            max_runners: 8,
+            ack_mode: AckMode::AfterProcess,
+        },
+    )
+    .unwrap();
+
+    let scaler = RecordingScaler { trace };
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+
+    let run = listener.run_until(&scaler, stop_rx);
+
+    tokio::pin!(run);
+
+    tokio::select! {
+        result = &mut run => panic!("listener exited unexpectedly: {result:?}"),
+        _ = tokio::task::yield_now() => {}
+    }
+
+    stop_tx.send(true).unwrap();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        &mut run,
+    )
+    .await
+    .expect("listener did not stop while get_message was pending")
+    .unwrap();
+}
