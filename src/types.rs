@@ -165,7 +165,11 @@ pub struct RunnerScaleSet {
     pub name: String,
     #[serde(rename = "runnerGroupId", default, skip_serializing_if = "is_zero_i32")]
     pub runner_group_id: i32,
-    #[serde(rename = "runnerGroupName", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "runnerGroupName",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub runner_group_name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<Label>,
@@ -173,7 +177,11 @@ pub struct RunnerScaleSet {
     pub runner_setting: RunnerSetting,
     #[serde(rename = "createdOn", default, with = "timeutil::opt")]
     pub created_on: Option<OffsetDateTime>,
-    #[serde(rename = "runnerJitConfigUrl", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "runnerJitConfigUrl",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub runner_jit_config_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statistics: Option<RunnerScaleSetStatistic>,
@@ -314,7 +322,9 @@ pub(crate) fn parse_runner_scale_set_message(
                     .push(serde_json::from_value(msg)?);
             }
             Some(MessageType::JobStarted) => {
-                message.job_started_messages.push(serde_json::from_value(msg)?);
+                message
+                    .job_started_messages
+                    .push(serde_json::from_value(msg)?);
             }
             Some(MessageType::JobCompleted) => {
                 message
@@ -356,4 +366,3 @@ pub fn parse_message_json(bytes: &[u8]) -> Result<RunnerScaleSetMessage> {
     let response: RunnerScaleSetMessageResponse = serde_json::from_slice(bytes)?;
     parse_runner_scale_set_message(response)
 }
-

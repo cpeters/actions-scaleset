@@ -18,7 +18,10 @@ where
     }
 }
 
-pub fn serialize_opt_time<S>(value: &Option<OffsetDateTime>, serializer: S) -> Result<S::Ok, S::Error>
+pub fn serialize_opt_time<S>(
+    value: &Option<OffsetDateTime>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {

@@ -146,7 +146,10 @@ async fn after_process_deletes_last() {
     let scaler = RecordingScaler {
         trace: trace.clone(),
     };
-    listener.handle_one(&scaler, sample_message()).await.unwrap();
+    listener
+        .handle_one(&scaler, sample_message())
+        .await
+        .unwrap();
     let calls = trace.calls.lock().unwrap().clone();
     assert_eq!(
         calls,
@@ -273,11 +276,8 @@ async fn run_until_interrupts_pending_get_message() {
 
     stop_tx.send(true).unwrap();
 
-    tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        &mut run,
-    )
-    .await
-    .expect("listener did not stop while get_message was pending")
-    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), &mut run)
+        .await
+        .expect("listener did not stop while get_message was pending")
+        .unwrap();
 }

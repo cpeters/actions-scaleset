@@ -68,7 +68,6 @@ impl GitHubConfig {
             }),
             _ => Err(invalid()),
         }
-
     }
 
     pub fn github_api_url(&self, path: &str) -> Url {
@@ -86,7 +85,8 @@ impl GitHubConfig {
             } else {
                 // api.github.com / api.github.localhost / api.*.ghe.com
                 // Keep simple: prefix api. for github.com and github.localhost
-                if host.eq_ignore_ascii_case("github.com") || host.eq_ignore_ascii_case("github.localhost")
+                if host.eq_ignore_ascii_case("github.com")
+                    || host.eq_ignore_ascii_case("github.localhost")
                 {
                     // "api." + host
                     // but for github.com that's api.github.com
@@ -123,14 +123,14 @@ impl GitHubConfig {
 }
 
 fn hosted_api_url(host: &str, path: &str) -> Url {
-    let api_host = if host.eq_ignore_ascii_case("www.github.com") || host.eq_ignore_ascii_case("github.com")
-    {
-        "api.github.com".to_string()
-    } else if host.eq_ignore_ascii_case("github.localhost") {
-        "api.github.localhost".to_string()
-    } else {
-        format!("api.{host}")
-    };
+    let api_host =
+        if host.eq_ignore_ascii_case("www.github.com") || host.eq_ignore_ascii_case("github.com") {
+            "api.github.com".to_string()
+        } else if host.eq_ignore_ascii_case("github.localhost") {
+            "api.github.localhost".to_string()
+        } else {
+            format!("api.{host}")
+        };
     let joined = join_url_path(&format!("https://{api_host}"), path);
     Url::parse(&joined).expect("hosted API URL")
 }

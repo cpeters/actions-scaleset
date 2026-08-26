@@ -9,8 +9,8 @@ use crate::error::{Error, Kind, Result};
 use crate::http::{expect_status, read_error_body};
 use crate::types::{
     parse_runner_scale_set_message, AcquireJobsResponse, RunnerScaleSetMessage,
-    RunnerScaleSetMessageResponse, RunnerScaleSetSession, API_VERSION, HEADER_SCALE_SET_MAX_CAPACITY,
-    SCALE_SET_ENDPOINT,
+    RunnerScaleSetMessageResponse, RunnerScaleSetSession, API_VERSION,
+    HEADER_SCALE_SET_MAX_CAPACITY, SCALE_SET_ENDPOINT,
 };
 
 /// Queue operations used by [`crate::listener::Listener`].

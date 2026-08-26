@@ -66,4 +66,3 @@ pub use types::{
     RunnerScaleSetStatistic, RunnerSetting, SystemInfo, DEFAULT_RUNNER_GROUP,
     HEADER_SCALE_SET_MAX_CAPACITY,
 };
-

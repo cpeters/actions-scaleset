@@ -161,35 +161,35 @@ impl<S: SessionApi> Listener<S> {
 
         let mut last_message_id = 0i32;
 
-		loop {
-			if let Some(rx) = stop.as_mut() {
-				if *rx.borrow() {
-					return Ok(());
-				}
-			}
+        loop {
+            if let Some(rx) = stop.as_mut() {
+                if *rx.borrow() {
+                    return Ok(());
+                }
+            }
 
-			tracing::info!(last_message_id, "getting next message");
+            tracing::info!(last_message_id, "getting next message");
 
-			let get_message = self
-				.session
-				.get_message(last_message_id, self.max_runners.load(Ordering::SeqCst));
+            let get_message = self
+                .session
+                .get_message(last_message_id, self.max_runners.load(Ordering::SeqCst));
 
-			let msg = match stop.as_mut() {
-				Some(rx) => {
-					tokio::select! {
-						changed = rx.changed() => {
-							match changed {
-								Ok(()) if *rx.borrow() => return Ok(()),
-								Ok(()) => continue,
-								Err(_) => return Ok(()),
-							}
-						}
-						result = get_message => result,
-					}
-				}
-				None => get_message.await,
-			}
-			.map_err(|e| Error::message(format!("failed to get message: {e}")))?;
+            let msg = match stop.as_mut() {
+                Some(rx) => {
+                    tokio::select! {
+                        changed = rx.changed() => {
+                            match changed {
+                                Ok(()) if *rx.borrow() => return Ok(()),
+                                Ok(()) => continue,
+                                Err(_) => return Ok(()),
+                            }
+                        }
+                        result = get_message => result,
+                    }
+                }
+                None => get_message.await,
+            }
+            .map_err(|e| Error::message(format!("failed to get message: {e}")))?;
 
             match msg {
                 None => {
@@ -249,11 +249,10 @@ impl<S: SessionApi> Listener<S> {
                 .map(|j| j.base.runner_request_id)
                 .collect();
             tracing::info!(count = ids.len(), "acquiring jobs");
-            let acquired = self
-                .session
-                .acquire_jobs(&ids)
-                .await
-                .map_err(|e| Error::message(format!("failed to acquire available jobs: {e}")))?;
+            let acquired =
+                self.session.acquire_jobs(&ids).await.map_err(|e| {
+                    Error::message(format!("failed to acquire available jobs: {e}"))
+                })?;
             tracing::info!(count = acquired.len(), "jobs acquired");
         }
 

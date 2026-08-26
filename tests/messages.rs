@@ -35,14 +35,8 @@ fn parses_batched_job_messages() {
     assert_eq!(msg.job_available_messages.len(), 1);
     assert_eq!(msg.job_started_messages.len(), 1);
     assert_eq!(msg.job_completed_messages.len(), 1);
-    assert_eq!(
-        msg.statistics.as_ref().unwrap().total_assigned_jobs,
-        3
-    );
-    assert_eq!(
-        msg.job_available_messages[0].base.runner_request_id,
-        11
-    );
+    assert_eq!(msg.statistics.as_ref().unwrap().total_assigned_jobs, 3);
+    assert_eq!(msg.job_available_messages[0].base.runner_request_id, 11);
 }
 
 #[test]

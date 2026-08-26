@@ -81,10 +81,7 @@ impl Error {
     pub fn has_kind(&self, kind: Kind) -> bool {
         match self {
             Self::Kind(k) => *k == kind,
-            Self::Classified {
-                kind: k,
-                source,
-            } => *k == kind || source.has_kind(kind),
+            Self::Classified { kind: k, source } => *k == kind || source.has_kind(kind),
             Self::Http {
                 source: Some(inner),
                 ..
@@ -140,70 +137,67 @@ pub(crate) fn map_response_error(
     }
     message.push(')');
 
-	let inner = if body.is_empty() {
-		seed.map(Error::from)
-			.unwrap_or_else(|| Error::message(format!("{message}: unknown error")))
-	} else if let Some(kind) = seed {
-		Error::Classified {
-			kind,
-			source: Box::new(Error::message(format!(
-				"{message}: {}",
-				String::from_utf8_lossy(body)
-			))),
-		}
-	} else if content_type.is_some_and(|ct| ct.contains("text/plain")) {
-		Error::Message(format!("{message}: {}", String::from_utf8_lossy(body)))
-	} else if let Ok(exception) = serde_json::from_slice::<ActionsException>(body) {
-		let kind = if exception.type_name.contains("AgentExistsException") {
-			Some(Kind::RunnerExists)
-		} else if exception.type_name.contains("AgentNotFoundException") {
-			Some(Kind::RunnerNotFound)
-		} else if exception.type_name.contains("JobStillRunningException") {
-			Some(Kind::JobStillRunning)
-		} else {
-			None
-		};
+    let inner = if body.is_empty() {
+        seed.map(Error::from)
+            .unwrap_or_else(|| Error::message(format!("{message}: unknown error")))
+    } else if let Some(kind) = seed {
+        Error::Classified {
+            kind,
+            source: Box::new(Error::message(format!(
+                "{message}: {}",
+                String::from_utf8_lossy(body)
+            ))),
+        }
+    } else if content_type.is_some_and(|ct| ct.contains("text/plain")) {
+        Error::Message(format!("{message}: {}", String::from_utf8_lossy(body)))
+    } else if let Ok(exception) = serde_json::from_slice::<ActionsException>(body) {
+        let kind = if exception.type_name.contains("AgentExistsException") {
+            Some(Kind::RunnerExists)
+        } else if exception.type_name.contains("AgentNotFoundException") {
+            Some(Kind::RunnerNotFound)
+        } else if exception.type_name.contains("JobStillRunningException") {
+            Some(Kind::JobStillRunning)
+        } else {
+            None
+        };
 
-		match kind {
-			Some(kind) => Error::Classified {
-				kind,
-				source: Box::new(Error::message(format!(
-					"{message}: {}",
-					exception.message
-				))),
-			},
-			None => Error::Message(format!("{message}: {exception}")),
-		}
-	} else {
-		Error::Message(format!(
-			"{message}: failed to unmarshal error response body: {:?}",
-			String::from_utf8_lossy(body)
-		))
-	};
+        match kind {
+            Some(kind) => Error::Classified {
+                kind,
+                source: Box::new(Error::message(format!("{message}: {}", exception.message))),
+            },
+            None => Error::Message(format!("{message}: {exception}")),
+        }
+    } else {
+        Error::Message(format!(
+            "{message}: failed to unmarshal error response body: {:?}",
+            String::from_utf8_lossy(body)
+        ))
+    };
 
-	let wrapped_kind = match status {
-		StatusCode::BAD_REQUEST => Some(Kind::BadRequest),
-		StatusCode::UNAUTHORIZED => Some(Kind::Unauthorized),
-		StatusCode::NOT_FOUND => Some(Kind::NotFound),
-		StatusCode::CONFLICT => Some(Kind::Conflict),
-		_ => None,
-	};
+    let wrapped_kind = match status {
+        StatusCode::BAD_REQUEST => Some(Kind::BadRequest),
+        StatusCode::UNAUTHORIZED => Some(Kind::Unauthorized),
+        StatusCode::NOT_FOUND => Some(Kind::NotFound),
+        StatusCode::CONFLICT => Some(Kind::Conflict),
+        _ => None,
+    };
 
-	let inner = match wrapped_kind {
-		Some(kind) => Error::Classified {
-			kind,
-			source: Box::new(inner),
-		},
-		None => inner,
-	};
+    let inner = match wrapped_kind {
+        Some(kind) => Error::Classified {
+            kind,
+            source: Box::new(inner),
+        },
+        None => inner,
+    };
 
-	Error::Http {
-		status: status.as_u16(),
-		message,
-		activity_id,
-		github_request_id,
-		source: Some(Box::new(inner)),
-	}
+    Error::Http {
+        status: status.as_u16(),
+        message,
+        activity_id,
+        github_request_id,
+        source: Some(Box::new(inner)),
+    }
 }
 
 #[cfg(test)]

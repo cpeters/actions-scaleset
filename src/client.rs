@@ -130,7 +130,10 @@ impl Client {
         }
     }
 
-    pub async fn list_runner_scale_sets(&self, runner_group_id: i32) -> Result<Vec<RunnerScaleSet>> {
+    pub async fn list_runner_scale_sets(
+        &self,
+        runner_group_id: i32,
+    ) -> Result<Vec<RunnerScaleSet>> {
         let url = self
             .actions_url(
                 SCALE_SET_ENDPOINT,
@@ -325,7 +328,11 @@ impl Client {
         t.send(builder).await
     }
 
-    async fn post_json<T: serde::Serialize>(&self, url: &str, body: &T) -> Result<reqwest::Response> {
+    async fn post_json<T: serde::Serialize>(
+        &self,
+        url: &str,
+        body: &T,
+    ) -> Result<reqwest::Response> {
         let auth = self.admin_authorization().await?;
         let t = self.inner.transport.read().await;
         let builder = t
