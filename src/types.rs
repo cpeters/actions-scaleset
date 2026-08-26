@@ -28,6 +28,8 @@ pub enum MessageType {
     JobAssigned,
     JobStarted,
     JobCompleted,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -331,7 +333,7 @@ pub(crate) fn parse_runner_scale_set_message(
                     .job_completed_messages
                     .push(serde_json::from_value(msg)?);
             }
-            None => {}
+            Some(MessageType::Unknown) | None => {}
         }
     }
 
