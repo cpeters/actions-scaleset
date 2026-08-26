@@ -1,0 +1,27 @@
+[package]
+name = "actions-scaleset"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Rust client for GitHub Actions Runner Scale Set APIs"
+readme = "README.md"
+keywords = ["github", "actions", "runners", "scaleset", "autoscaling"]
+categories = ["api-bindings", "asynchronous"]
+repository = "https://github.com/actions/scaleset"
+
+[dependencies]
+async-trait = "0.1"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
+tokio = { version = "1", features = ["macros", "sync", "time"] }
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
