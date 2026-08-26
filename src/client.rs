@@ -97,7 +97,11 @@ impl Client {
     }
 
     pub async fn system_info(&self) -> SystemInfo {
-        self.inner.transport.read().await.system_info.clone()
+        self.transport_snapshot().await.system_info.clone()
+    }
+
+    pub(crate) async fn transport_snapshot(&self) -> Transport {
+        self.inner.transport.read().await.clone()
     }
 
     pub fn github_config(&self) -> &GitHubConfig {
@@ -306,7 +310,7 @@ impl Client {
 
     async fn get(&self, url: &str) -> Result<reqwest::Response> {
         let auth = self.admin_authorization().await?;
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .get(url)
@@ -318,7 +322,7 @@ impl Client {
 
     async fn delete(&self, url: &str) -> Result<reqwest::Response> {
         let auth = self.admin_authorization().await?;
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .delete(url)
@@ -334,7 +338,7 @@ impl Client {
         body: &T,
     ) -> Result<reqwest::Response> {
         let auth = self.admin_authorization().await?;
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .post(url)
@@ -350,7 +354,7 @@ impl Client {
         body: &T,
     ) -> Result<reqwest::Response> {
         let auth = self.admin_authorization().await?;
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .patch(url)
@@ -366,7 +370,7 @@ impl Client {
         bearer: &str,
         body: Vec<u8>,
     ) -> Result<reqwest::Response> {
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .post(url)
@@ -424,7 +428,7 @@ impl Client {
                 format!("Bearer {access}")
             }
         };
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .post(url.as_str())
@@ -448,7 +452,7 @@ impl Client {
         let jwt = create_jwt_for_github_app(app)?;
         let path = format!("/app/installations/{}/access_tokens", app.installation_id);
         let url = self.inner.config.github_api_url(&path);
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .post(url.as_str())
@@ -476,7 +480,7 @@ impl Client {
             "url": self.inner.config.config_url.as_str(),
             "runner_event": "register",
         });
-        let t = self.inner.transport.read().await;
+        let t = self.transport_snapshot().await;
         let builder = t
             .http
             .post(url.as_str())

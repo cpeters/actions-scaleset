@@ -78,7 +78,7 @@ impl MessageSessionClient {
         );
         let url = self.inner.actions_url(&path, &[]).await?;
         let auth = self.inner.admin_authorization().await?;
-        let t = self.inner.inner.transport.read().await;
+        let t = self.inner.transport_snapshot().await;
         let builder = t
             .http
             .delete(&url)
@@ -104,7 +104,7 @@ impl MessageSessionClient {
         );
         let url = self.inner.actions_url(&path, &[]).await?;
         let auth = self.inner.admin_authorization().await?;
-        let t = self.inner.inner.transport.read().await;
+        let t = self.inner.transport_snapshot().await;
         let builder = t
             .http
             .patch(&url)
@@ -128,7 +128,7 @@ impl MessageSessionClient {
             url.query_pairs_mut()
                 .append_pair("lastMessageId", &last_message_id.to_string());
         }
-        let t = self.inner.inner.transport.read().await;
+        let t = self.inner.transport_snapshot().await;
         let builder = t
             .http
             .get(url.as_str())
@@ -170,7 +170,7 @@ impl MessageSessionClient {
         path.push('/');
         path.push_str(&message_id.to_string());
         url.set_path(&path);
-        let t = self.inner.inner.transport.read().await;
+        let t = self.inner.transport_snapshot().await;
         let builder = t
             .http
             .delete(url.as_str())
