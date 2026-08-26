@@ -71,12 +71,10 @@ impl GitHubConfig {
     }
 
     pub fn github_api_url(&self, path: &str) -> Url {
-        let mut result = Url::parse(&format!(
-            "{}://{}",
-            self.config_url.scheme(),
-            self.config_url.host_str().unwrap_or_default()
-        ))
-        .expect("scheme+host is a valid URL");
+        let mut result = self.config_url.clone();
+        result.set_path("");
+        result.set_query(None);
+        result.set_fragment(None);
 
         if self.is_hosted {
             let host = self.config_url.host_str().unwrap_or_default();
@@ -209,5 +207,14 @@ mod tests {
         let api = cfg.github_api_url("/zen");
         assert!(api.as_str().contains("/api/v3/zen"));
         assert_eq!(api.host_str(), Some("ghe.example.com"));
+    }
+
+    #[test]
+    fn ghes_preserves_custom_port() {
+        let cfg = GitHubConfig::parse("https://ghe.example.com:8443/octo-org").unwrap();
+        let api = cfg.github_api_url("/zen");
+
+        assert_eq!(api.as_str(), "https://ghe.example.com:8443/api/v3/zen");
+        assert_eq!(api.port(), Some(8443));
     }
 }
