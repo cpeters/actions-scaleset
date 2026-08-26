@@ -185,6 +185,32 @@ async fn after_process_skips_delete_when_acquire_fails() {
         fail_acquire: true,
         ..Default::default()
     });
+
+    let listener = listener(AckMode::AfterProcess, trace.clone());
+
+    let scaler = RecordingScaler {
+        trace: trace.clone(),
+    };
+
+    let err = listener
+        .handle_one(&scaler, sample_message())
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("acquire"));
+
+    let calls = trace.calls.lock().unwrap().clone();
+
+    assert_eq!(calls, vec!["acquire:[501]".to_string()]);
+    assert!(!calls.iter().any(|c| c.starts_with("delete:")));
+}
+
+#[tokio::test]
+async fn after_process_skips_delete_when_desired_count_fails() {
+    let trace = Arc::new(Trace {
+        fail_desired: true,
+        ..Default::default()
+    });
     let listener = listener(AckMode::AfterProcess, trace.clone());
     let scaler = RecordingScaler {
         trace: trace.clone(),
@@ -193,9 +219,17 @@ async fn after_process_skips_delete_when_acquire_fails() {
         .handle_one(&scaler, sample_message())
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("acquire"));
+    assert!(err.to_string().contains("desired runner count"));
+
     let calls = trace.calls.lock().unwrap().clone();
-    assert_eq!(calls, vec!["acquire:[501]".to_string()]);
+    assert_eq!(
+        calls,
+        vec![
+            "acquire:[501]".to_string(),
+            "started:job-1".to_string(),
+            "desired:4".to_string(),
+        ]
+    );
     assert!(!calls.iter().any(|c| c.starts_with("delete:")));
 }
 
