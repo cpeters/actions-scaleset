@@ -1,4 +1,4 @@
-//! Message listener with **correct** acknowledgment ordering.
+//! Message listener with correct acknowledgment ordering.
 //!
 //! The Go `listener` package deletes a message *before* `AcquireJobs` and
 //! scaler callbacks. If those later steps fail, the message is gone and will
@@ -218,6 +218,13 @@ impl<S: SessionApi> Listener<S> {
     }
 
     async fn process(&self, scaler: &dyn Scaler, msg: &RunnerScaleSetMessage) -> Result<()> {
+        let stats = msg
+            .statistics
+            .as_ref()
+            .ok_or_else(|| Error::message("message statistics is nil"))?;
+
+        let assigned = stats.total_assigned_jobs;
+
         if !msg.job_available_messages.is_empty() {
             let ids: Vec<i64> = msg
                 .job_available_messages
@@ -248,16 +255,13 @@ impl<S: SessionApi> Listener<S> {
                 .map_err(|e| Error::message(format!("failed to handle job completed: {e}")))?;
         }
 
-        let assigned = msg
-            .statistics
-            .as_ref()
-            .map(|s| s.total_assigned_jobs)
-            .unwrap_or(0);
         let desired = scaler
             .handle_desired_runner_count(assigned)
             .await
             .map_err(|e| Error::message(format!("failed to handle desired runner count: {e}")))?;
+
         self.metrics.record_desired_runners(desired);
+
         Ok(())
     }
 

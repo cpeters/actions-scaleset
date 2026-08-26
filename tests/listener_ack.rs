@@ -180,6 +180,23 @@ async fn after_process_skips_delete_when_acquire_fails() {
 }
 
 #[tokio::test]
+async fn missing_statistics_is_not_processed_or_acked() {
+    let trace = Arc::new(Trace::default());
+    let listener = listener(AckMode::AfterProcess, trace.clone());
+    let scaler = RecordingScaler {
+        trace: trace.clone(),
+    };
+
+    let mut msg = sample_message();
+    msg.statistics = None;
+
+    let err = listener.handle_one(&scaler, msg).await.unwrap_err();
+
+    assert!(err.to_string().contains("message statistics is nil"));
+    assert!(trace.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn go_compat_deletes_before_acquire() {
     let trace = Arc::new(Trace {
         fail_acquire: true,
