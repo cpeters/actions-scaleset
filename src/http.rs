@@ -5,6 +5,11 @@ use reqwest::{Client as HttpClient, RequestBuilder, Response, StatusCode};
 use crate::error::{Error, Kind, Result};
 use crate::types::SystemInfo;
 
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_RETRY_MAX: u32 = 4;
+const DEFAULT_RETRY_WAIT_MAX: Duration = Duration::from_secs(30);
+const DEFAULT_DANGER_ACCEPT_INVALID_CERTS: bool = false;
+
 const HEADER_ACTIONS_ACTIVITY_ID: &str = "ActivityId";
 const HEADER_GITHUB_REQUEST_ID: &str = "X-GitHub-Request-Id";
 
@@ -19,10 +24,10 @@ pub struct HttpOptions {
 impl Default for HttpOptions {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(60),
-            retry_max: 4,
-            retry_wait_max: Duration::from_secs(30),
-            danger_accept_invalid_certs: false,
+            timeout: DEFAULT_HTTP_TIMEOUT,
+            retry_max: DEFAULT_RETRY_MAX,
+            retry_wait_max: DEFAULT_RETRY_WAIT_MAX,
+            danger_accept_invalid_certs: DEFAULT_DANGER_ACCEPT_INVALID_CERTS,
         }
     }
 }
