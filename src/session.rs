@@ -23,7 +23,7 @@ pub trait SessionApi: Send + Sync {
     ) -> Result<Option<RunnerScaleSetMessage>>;
     async fn delete_message(&self, message_id: i32) -> Result<()>;
     async fn acquire_jobs(&self, request_ids: &[i64]) -> Result<Vec<i64>>;
-    fn session(&self) -> RunnerScaleSetSession;
+    async fn session(&self) -> RunnerScaleSetSession;
 }
 
 pub struct MessageSessionClient {
@@ -276,10 +276,7 @@ impl SessionApi for MessageSessionClient {
         }
     }
 
-    fn session(&self) -> RunnerScaleSetSession {
-        self.session
-            .try_read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+    async fn session(&self) -> RunnerScaleSetSession {
+        self.current_session().await
     }
 }

@@ -122,7 +122,7 @@ impl<S: SessionApi> Listener<S> {
     }
 
     pub async fn run(&self, scaler: &dyn Scaler) -> Result<()> {
-        let initial = self.session.session();
+        let initial = self.session.session().await;
         self.run_with_stop(scaler, initial, None).await
     }
 
@@ -132,7 +132,7 @@ impl<S: SessionApi> Listener<S> {
         scaler: &dyn Scaler,
         mut stop: watch::Receiver<bool>,
     ) -> Result<()> {
-        let initial = self.session.session();
+        let initial = self.session.session().await;
         self.run_with_stop(scaler, initial, Some(&mut stop)).await
     }
 

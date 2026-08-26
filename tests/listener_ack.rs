@@ -51,7 +51,7 @@ impl SessionApi for MockSession {
         Ok(request_ids.to_vec())
     }
 
-    fn session(&self) -> RunnerScaleSetSession {
+    async fn session(&self) -> RunnerScaleSetSession {
         self.session.clone()
     }
 }
