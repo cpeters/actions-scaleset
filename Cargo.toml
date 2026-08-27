@@ -8,7 +8,7 @@ description = "Rust client for GitHub Actions Runner Scale Set APIs"
 readme = "README.md"
 keywords = ["github", "actions", "runners", "scaleset", "autoscaling"]
 categories = ["api-bindings", "asynchronous"]
-repository = "https://github.com/actions/scaleset"
+repository = "https://github.com/cpeters/actions-scaleset"
 
 [dependencies]
 async-trait = "0.1"

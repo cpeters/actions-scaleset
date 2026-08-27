@@ -4,6 +4,7 @@
 //! scaler callbacks. If those later steps fail, the message is gone and will
 //! never be redelivered.
 //!
+
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
@@ -29,9 +30,11 @@ impl ListenerConfig {
         if self.scale_set_id == 0 {
             return Err(Error::message("scaleSetID is required"));
         }
+
         if self.max_runners < 0 {
             return Err(Error::message("maxRunners must be >= 0"));
         }
+
         Ok(())
     }
 }
@@ -60,7 +63,6 @@ pub trait Scaler: Send + Sync {
     async fn handle_desired_runner_count(&self, count: i32) -> Result<i32>;
 }
 
-#[async_trait]
 pub trait MetricsRecorder: Send + Sync {
     fn record_statistics(&self, statistics: &RunnerScaleSetStatistic);
     fn record_job_started(&self, job: &JobStarted);
@@ -87,6 +89,7 @@ pub struct Listener<S> {
 impl<S: SessionApi> Listener<S> {
     pub fn new(session: S, config: ListenerConfig) -> Result<Self> {
         config.validate()?;
+
         Ok(Self {
             session,
             max_runners: AtomicI32::new(config.max_runners),
@@ -104,28 +107,33 @@ impl<S: SessionApi> Listener<S> {
         if count < 0 {
             return Err(Error::message("maxRunners must be >= 0"));
         }
+
         self.max_runners.store(count, Ordering::SeqCst);
 
         Ok(())
     }
 
-    /// Process a single already-fetched message (used by tests and custom loops).
+    /// Process a single already-fetched message.
+    ///
+    /// This is primarily useful for tests and custom message loops.
     pub async fn handle_one(&self, scaler: &dyn Scaler, msg: RunnerScaleSetMessage) -> Result<()> {
         self.handle_message(scaler, msg).await
     }
 
     pub async fn run(&self, scaler: &dyn Scaler) -> Result<()> {
         let initial = self.session.session().await;
+
         self.run_with_stop(scaler, initial, None).await
     }
 
-    /// Same as [`Self::run`] but exits when `stop` is set (or the sender is dropped).
+    /// Same as [`Self::run`] but exits when `stop` is set or the sender is dropped.
     pub async fn run_until(
         &self,
         scaler: &dyn Scaler,
         mut stop: watch::Receiver<bool>,
     ) -> Result<()> {
         let initial = self.session.session().await;
+
         self.run_with_stop(scaler, initial, Some(&mut stop)).await
     }
 
@@ -153,7 +161,8 @@ impl<S: SessionApi> Listener<S> {
 
         let desired = scaler
             .handle_desired_runner_count(stats.total_assigned_jobs)
-            .await?;
+            .await
+            .map_err(|err| err.context("failed to handle initial desired runner count"))?;
 
         self.metrics.record_desired_runners(desired);
 
@@ -187,26 +196,34 @@ impl<S: SessionApi> Listener<S> {
                 }
                 None => get_message.await,
             }
-            .map_err(|e| Error::message(format!("failed to get message: {e}")))?;
+            .map_err(|err| err.context("failed to get message"))?;
 
             match msg {
                 None => {
                     let assigned = {
-                        let stats = self
-                            .latest_statistics
-                            .lock()
-                            .map_err(|_| Error::message("latest statistics lock poisoned"))?;
+                        let stats = self.latest_statistics.lock().map_err(|err| {
+                            Error::message(format!("latest statistics lock poisoned: {err}"))
+                        })?;
 
                         stats
                             .as_ref()
                             .ok_or_else(|| Error::message("latest statistics is nil"))?
                             .total_assigned_jobs
                     };
-                    scaler.handle_desired_runner_count(assigned).await?;
+
+                    let desired = scaler
+                        .handle_desired_runner_count(assigned)
+                        .await
+                        .map_err(|err| err.context("failed to handle desired runner count"))?;
+
+                    self.metrics.record_desired_runners(desired);
                 }
+
                 Some(msg) => {
                     let message_id = msg.message_id;
+
                     self.handle_message(scaler, msg).await?;
+
                     last_message_id = message_id;
                 }
             }
@@ -223,7 +240,7 @@ impl<S: SessionApi> Listener<S> {
         self.session
             .delete_message(msg.message_id)
             .await
-            .map_err(|e| Error::message(format!("failed to delete message: {e}")))?;
+            .map_err(|err| err.context("failed to delete message"))?;
 
         Ok(())
     }
@@ -240,35 +257,42 @@ impl<S: SessionApi> Listener<S> {
             let ids: Vec<i64> = msg
                 .job_available_messages
                 .iter()
-                .map(|j| j.base.runner_request_id)
+                .map(|job| job.base.runner_request_id)
                 .collect();
+
             tracing::info!(count = ids.len(), "acquiring jobs");
-            let acquired =
-                self.session.acquire_jobs(&ids).await.map_err(|e| {
-                    Error::message(format!("failed to acquire available jobs: {e}"))
-                })?;
+
+            let acquired = self
+                .session
+                .acquire_jobs(&ids)
+                .await
+                .map_err(|err| err.context("failed to acquire available jobs"))?;
+
             tracing::info!(count = acquired.len(), "jobs acquired");
         }
 
         for job in &msg.job_started_messages {
             self.metrics.record_job_started(job);
+
             scaler
                 .handle_job_started(job)
                 .await
-                .map_err(|e| Error::message(format!("failed to handle job started: {e}")))?;
+                .map_err(|err| err.context("failed to handle job started"))?;
         }
+
         for job in &msg.job_completed_messages {
             self.metrics.record_job_completed(job);
+
             scaler
                 .handle_job_completed(job)
                 .await
-                .map_err(|e| Error::message(format!("failed to handle job completed: {e}")))?;
+                .map_err(|err| err.context("failed to handle job completed"))?;
         }
 
         let desired = scaler
             .handle_desired_runner_count(assigned)
             .await
-            .map_err(|e| Error::message(format!("failed to handle desired runner count: {e}")))?;
+            .map_err(|err| err.context("failed to handle desired runner count"))?;
 
         self.metrics.record_desired_runners(desired);
 
@@ -281,7 +305,7 @@ impl<S: SessionApi> Listener<S> {
         let mut stored = self
             .latest_statistics
             .lock()
-            .map_err(|_| Error::message("latest statistics lock poisoned"))?;
+            .map_err(|err| Error::message(format!("latest statistics lock poisoned: {err}")))?;
 
         *stored = Some(stats.clone());
 
@@ -289,7 +313,9 @@ impl<S: SessionApi> Listener<S> {
     }
 }
 
-/// Spawn `run` on the current runtime. The caller owns cancellation via `stop`.
+/// Spawn [`Listener::run_until`] on the current Tokio runtime.
+///
+/// The caller owns cancellation via `stop`.
 pub fn spawn_listener<S>(
     listener: Arc<Listener<S>>,
     scaler: Arc<dyn Scaler>,
