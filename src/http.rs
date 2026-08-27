@@ -63,12 +63,13 @@ impl Transport {
 
     pub async fn send(&self, builder: RequestBuilder) -> Result<Response> {
         let mut last_err: Option<Error> = None;
-        let retries = self.options.retry_max.max(1);
-        for attempt in 0..retries {
+        let attempts = self.options.retry_max.saturating_add(1);
+
+        for attempt in 0..attempts {
             match builder.try_clone() {
                 Some(cloned) => match cloned.send().await {
                     Ok(resp) => {
-                        if should_retry_status(resp.status()) && attempt + 1 < retries {
+                        if should_retry_status(resp.status()) && attempt + 1 < attempts {
                             backoff(attempt, self.options.retry_wait_max).await;
                             continue;
                         }
@@ -76,7 +77,7 @@ impl Transport {
                     }
                     Err(err) => {
                         last_err = Some(err.into());
-                        if attempt + 1 < retries {
+                        if attempt + 1 < attempts {
                             backoff(attempt, self.options.retry_wait_max).await;
                             continue;
                         }
