@@ -29,17 +29,12 @@ impl GitHubConfig {
             .path()
             .trim_matches('/')
             .split('/')
-            .filter(|p| !p.is_empty())
-            .map(|s| s.to_string())
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
             .collect();
 
-        let invalid = || {
-            Error::Message(format!(
-                "{:?}: {}",
-                url.as_str(),
-                Kind::InvalidGitHubConfigUrl
-            ))
-        };
+        let invalid =
+            || Error::from(Kind::InvalidGitHubConfigUrl).context(format!("{:?}", url.as_str()));
 
         match path_parts.as_slice() {
             [org] if !org.is_empty() => Ok(Self {
@@ -50,6 +45,7 @@ impl GitHubConfig {
                 repository: String::new(),
                 is_hosted,
             }),
+
             [first, second] if first.eq_ignore_ascii_case("enterprises") => Ok(Self {
                 config_url: url,
                 scope: GitHubScope::Enterprise,
@@ -58,6 +54,7 @@ impl GitHubConfig {
                 repository: String::new(),
                 is_hosted,
             }),
+
             [org, repo] => Ok(Self {
                 config_url: url,
                 scope: GitHubScope::Repository,
@@ -66,6 +63,7 @@ impl GitHubConfig {
                 repository: repo.clone(),
                 is_hosted,
             }),
+
             _ => Err(invalid()),
         }
     }
@@ -196,8 +194,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_urls() {
-        assert!(GitHubConfig::parse("https://github.com/").is_err());
-        assert!(GitHubConfig::parse("https://github.com/a/b/c").is_err());
+        let root = GitHubConfig::parse("https://github.com/").unwrap_err();
+
+        assert!(
+            root.has_kind(Kind::InvalidGitHubConfigUrl),
+            "root GitHub URL should be classified as an invalid GitHub config URL"
+        );
+
+        let too_many_parts = GitHubConfig::parse("https://github.com/a/b/c").unwrap_err();
+
+        assert!(
+            too_many_parts.has_kind(Kind::InvalidGitHubConfigUrl),
+            "config URL with too many path components should be classified as invalid"
+        );
     }
 
     #[test]
