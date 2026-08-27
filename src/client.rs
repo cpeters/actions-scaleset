@@ -265,7 +265,22 @@ impl Client {
         runner_scale_set_id: i32,
         owner: impl Into<String>,
     ) -> Result<MessageSessionClient> {
-        MessageSessionClient::create(self.clone(), runner_scale_set_id, owner.into()).await
+        let transport = self.transport_snapshot().await;
+
+        MessageSessionClient::create(self.clone(), runner_scale_set_id, owner.into(), transport)
+            .await
+    }
+
+    pub async fn message_session_client_with_http_options(
+        &self,
+        runner_scale_set_id: i32,
+        owner: impl Into<String>,
+        options: HttpOptions,
+    ) -> Result<MessageSessionClient> {
+        let transport = Transport::new(self.system_info().await, options)?;
+
+        MessageSessionClient::create(self.clone(), runner_scale_set_id, owner.into(), transport)
+            .await
     }
 
     pub(crate) async fn actions_url(
@@ -361,23 +376,6 @@ impl Client {
             .header("Authorization", auth)
             .header("User-Agent", &t.user_agent)
             .json(body);
-        t.send(builder).await
-    }
-
-    pub(crate) async fn post_actions_raw(
-        &self,
-        url: &str,
-        bearer: &str,
-        body: Vec<u8>,
-    ) -> Result<reqwest::Response> {
-        let t = self.transport_snapshot().await;
-        let builder = t
-            .http
-            .post(url)
-            .header("Authorization", bearer)
-            .header("User-Agent", &t.user_agent)
-            .header("Content-Type", "application/json")
-            .body(body);
         t.send(builder).await
     }
 
