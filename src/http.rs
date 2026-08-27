@@ -91,9 +91,12 @@ impl Transport {
 }
 
 fn should_retry_status(status: StatusCode) -> bool {
-    status.is_server_error()
-        || status == StatusCode::REQUEST_TIMEOUT
-        || status == StatusCode::TOO_MANY_REQUESTS
+    match status {
+        StatusCode::TOO_MANY_REQUESTS => true,
+        StatusCode::NOT_IMPLEMENTED => false,
+        status if status.is_server_error() => true,
+        _ => false,
+    }
 }
 
 async fn backoff(attempt: u32, cap: Duration) {
@@ -162,4 +165,20 @@ fn header(resp: &Response, name: &str) -> Option<String> {
         .get(name)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_status_matches_upstream_policy() {
+        assert!(should_retry_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(should_retry_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(should_retry_status(StatusCode::TOO_MANY_REQUESTS));
+
+        assert!(!should_retry_status(StatusCode::NOT_IMPLEMENTED));
+        assert!(!should_retry_status(StatusCode::REQUEST_TIMEOUT));
+        assert!(!should_retry_status(StatusCode::BAD_REQUEST));
+    }
 }
