@@ -476,11 +476,14 @@ impl Client {
             .inner
             .config
             .github_api_url("/actions/runner-registration");
+
         let body = serde_json::json!({
             "url": self.inner.config.config_url.as_str(),
             "runner_event": "register",
         });
+
         let t = self.transport_snapshot().await;
+
         let builder = t
             .http
             .post(url.as_str())
@@ -488,17 +491,24 @@ impl Client {
             .header("User-Agent", &t.user_agent)
             .header("Content-Type", "application/json")
             .json(&body);
-        let resp = t.send(builder).await?;
-        if !resp.status().is_success() {
-            return Err(crate::http::read_error_body(resp, "POST", url.as_str(), None).await);
+
+        let response = t
+            .send_with_retry_statuses(builder, &[StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN])
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(crate::http::read_error_body(response, "POST", url.as_str(), None).await);
         }
-        let parsed: AdminConnection = resp.json().await?;
-        if parsed.url.is_empty() || parsed.token.is_empty() {
+
+        let connection: AdminConnection = response.json().await?;
+
+        if connection.url.is_empty() || connection.token.is_empty() {
             return Err(Error::message(
                 "actions service admin connection missing url or token",
             ));
         }
-        Ok(parsed)
+
+        Ok(connection)
     }
 }
 
@@ -521,4 +531,130 @@ struct AdminConnection {
     url: String,
     #[serde(default)]
     token: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use jsonwebtoken::{EncodingKey, Header};
+    use serde::Serialize;
+    use wiremock::{
+        matchers::{body_json, header, method, path},
+        Mock, MockServer, Request, ResponseTemplate,
+    };
+
+    #[derive(Serialize)]
+    struct TestClaims {
+        exp: i64,
+    }
+
+    fn test_admin_jwt() -> String {
+        let expires_at = OffsetDateTime::now_utc() + Duration::minutes(10);
+
+        jsonwebtoken::encode(
+            &Header::default(),
+            &TestClaims {
+                exp: expires_at.unix_timestamp(),
+            },
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .unwrap()
+    }
+
+    fn test_pat_client(server: &MockServer) -> Client {
+        Client::with_personal_access_token(
+            PersonalAccessTokenConfig {
+                github_config_url: format!("{}/octo-org", server.uri()),
+                personal_access_token: "github-pat".to_string(),
+                system_info: SystemInfo::default(),
+            },
+            HttpOptions {
+                retry_max: 1,
+                retry_wait_max: std::time::Duration::ZERO,
+                ..HttpOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    async fn mock_registration_token(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path(
+                "/api/v3/orgs/octo-org/actions/runners/registration-token",
+            ))
+            .and(header("authorization", "Bearer github-pat"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "token": "registration-token"
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    async fn assert_admin_connection_retries(initial_status: StatusCode) {
+        let server = MockServer::start().await;
+        let admin_token = test_admin_jwt();
+
+        mock_registration_token(&server).await;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let responder_calls = Arc::clone(&calls);
+
+        let response_token = admin_token.clone();
+        let response_url = server.uri();
+
+        Mock::given(method("POST"))
+            .and(path("/api/v3/actions/runner-registration"))
+            .and(header("authorization", "RemoteAuth registration-token"))
+            .and(body_json(serde_json::json!({
+                "url": format!("{}/octo-org", server.uri()),
+                "runner_event": "register"
+            })))
+            .respond_with(move |_request: &Request| {
+                let attempt = responder_calls.fetch_add(1, Ordering::SeqCst);
+
+                if attempt == 0 {
+                    ResponseTemplate::new(initial_status.as_u16())
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "url": response_url,
+                        "token": response_token
+                    }))
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let client = test_pat_client(&server);
+
+        let authorization = client.admin_authorization().await.unwrap();
+
+        assert_eq!(authorization, format!("Bearer {admin_token}"));
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // A second request should use the cached admin token rather
+        // than fetching another registration/admin connection.
+        let cached = client.admin_authorization().await.unwrap();
+
+        assert_eq!(cached, authorization);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn admin_connection_retries_unauthorized() {
+        assert_admin_connection_retries(StatusCode::UNAUTHORIZED).await;
+    }
+
+    #[tokio::test]
+    async fn admin_connection_retries_forbidden() {
+        assert_admin_connection_retries(StatusCode::FORBIDDEN).await;
+    }
 }

@@ -65,6 +65,14 @@ impl Transport {
     }
 
     pub async fn send(&self, builder: RequestBuilder) -> Result<Response> {
+        self.send_with_retry_statuses(builder, &[]).await
+    }
+
+    pub(crate) async fn send_with_retry_statuses(
+        &self,
+        builder: RequestBuilder,
+        additional_retry_statuses: &[StatusCode],
+    ) -> Result<Response> {
         let mut last_err: Option<Error> = None;
         let attempts = self.options.retry_max.saturating_add(1);
 
@@ -75,7 +83,12 @@ impl Transport {
 
             match request.send().await {
                 Ok(response) => {
-                    if !should_retry_status(response.status()) || attempt + 1 >= attempts {
+                    let status = response.status();
+
+                    let retryable =
+                        should_retry_status(status) || additional_retry_statuses.contains(&status);
+
+                    if !retryable || attempt + 1 >= attempts {
                         return Ok(response);
                     }
 
