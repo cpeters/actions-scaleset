@@ -4,14 +4,51 @@ Rust client for the GitHub Actions **Runner Scale Set** APIs. Port of
 [`github.com/actions/scaleset`](https://github.com/actions/scaleset) for custom
 autoscalers (VMs, containers, vSphere vPods, bare metal).
 
-The API is in public preview. This crate mirrors the Go surface:
+The API is in public preview. This crate implements the core Go client surface:
 
-- Create / update / delete runner scale sets
-- Generate just-in-time runner configs
+- Create, retrieve, update, list, and delete runner scale sets
+- Retrieve runner groups
+- Generate just-in-time runner configurations
+- Retrieve and remove runners
 - Message sessions (`GetMessage`, `DeleteMessage`, `AcquireJobs`)
 - GitHub App (JWT → installation token) or PAT authentication
 - Automatic Actions-service admin token refresh
 - Session token refresh on `MessageQueueTokenExpired`
+- Configurable retry and timeout behavior
+- Session-specific HTTP options
+
+This crate is not intended to be a drop-in replacement for every transport and
+diagnostic feature of the Go client.
+
+## Upstream compatibility
+
+The core Runner Scale Set client and message-session APIs are implemented.
+Some ancillary transport and diagnostic options from the Go client are not
+currently implemented.
+
+| Capability | Rust crate |
+| --- | --- |
+| Runner scale set APIs | Supported |
+| Runner APIs | Supported |
+| JIT runner configuration | Supported |
+| PAT authentication | Supported |
+| GitHub App authentication | Supported |
+| Message sessions | Supported |
+| Message queue token refresh | Supported |
+| Admin token refresh | Supported |
+| Configurable retries | Supported |
+| Configurable timeout | Supported |
+| Session-specific HTTP options | Supported |
+| Disable TLS certificate verification | Supported |
+| Custom root CAs | Not implemented |
+| mTLS client certificates | Not implemented |
+| Custom proxy function | Not implemented |
+| Custom retry HTTP client | Not implemented |
+| Custom logger | Not implemented |
+| `DebugInfo` diagnostics | Not implemented |
+
+The listener intentionally differs from upstream by acknowledging queue
+messages only after successful processing. See the next section.
 
 ## Message acknowledgment
 

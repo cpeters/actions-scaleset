@@ -1,46 +1,14 @@
 //! Rust client for the GitHub Actions **Runner Scale Set** APIs.
 //!
-//! Port of [`github.com/actions/scaleset`](https://github.com/actions/scaleset)
-//! with one intentional divergence: [`listener`] acknowledges messages
-//! **after** job acquisition and scaler callbacks succeed, so a crash mid-handle
-//! redelivers the message instead of dropping it.
+//! Implements the core client and message-session behavior of
+//! [`github.com/actions/scaleset`](https://github.com/actions/scaleset).
+//! It is not a drop-in replacement for every upstream HTTP transport or
+//! diagnostic option.
 //!
-//! ```ignore
-//! use actions_scaleset::{
-//!     Client, GitHubAppAuth, GitHubAppClientConfig, HttpOptions, Listener, ListenerConfig,
-//!     RunnerScaleSet, Scaler, SystemInfo,
-//! };
+//! One behavior intentionally differs from upstream: [`listener`] acknowledges
+//! messages **after** job acquisition and scaler callbacks succeed, so a
+//! processing failure leaves the message available for redelivery.
 //!
-//! let client = Client::with_github_app(
-//!     GitHubAppClientConfig {
-//!         github_config_url: "https://github.com/org/repo".into(),
-//!         github_app_auth: GitHubAppAuth {
-//!             client_id: "...".into(),
-//!             installation_id: 1,
-//!             private_key_pem: std::fs::read_to_string("app.pem")?,
-//!         },
-//!         system_info: SystemInfo {
-//!             system: "vks-operator".into(),
-//!             version: "0.1.0".into(),
-//!             commit_sha: "dev".into(),
-//!             scale_set_id: 0,
-//!             subsystem: "listener".into(),
-//!         },
-//!     },
-//!     HttpOptions::default(),
-//! )?;
-//!
-//! let created = client
-//!     .create_runner_scale_set(RunnerScaleSet { name: "vks-builders".into(), ..Default::default() })
-//!     .await?;
-//! let session = client.message_session_client(created.id, "vks-operator").await?;
-//! let listener = Listener::new(session, ListenerConfig {
-//!     scale_set_id: created.id,
-//!     max_runners: 32,
-//! })?;
-//! listener.run(&my_scaler).await?;
-//! ```
-
 pub mod auth;
 pub mod client;
 pub mod config;

@@ -119,7 +119,7 @@ impl<S: SessionApi> Listener<S> {
         self.run_with_stop(scaler, initial, None).await
     }
 
-    /// Same as [`run`] but exits when `stop` is set (or the sender is dropped).
+    /// Same as [`Self::run`] but exits when `stop` is set (or the sender is dropped).
     pub async fn run_until(
         &self,
         scaler: &dyn Scaler,
