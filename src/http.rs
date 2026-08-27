@@ -3,7 +3,7 @@ use std::time::Duration;
 use reqwest::{header::RETRY_AFTER, Client as HttpClient, RequestBuilder, Response, StatusCode};
 use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 
-use crate::error::{Error, Kind, Result};
+use crate::error::{map_response_error, Error, Kind, ResponseErrorContext, Result};
 use crate::types::SystemInfo;
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(300);
@@ -11,6 +11,7 @@ const DEFAULT_RETRY_MAX: u32 = 4;
 const DEFAULT_RETRY_WAIT_MIN: Duration = Duration::from_secs(1);
 const DEFAULT_RETRY_WAIT_MAX: Duration = Duration::from_secs(30);
 const DEFAULT_DANGER_ACCEPT_INVALID_CERTS: bool = false;
+const RETRY_RESPONSE_DRAIN_LIMIT: usize = 4096;
 
 const HEADER_ACTIONS_ACTIVITY_ID: &str = "ActivityId";
 const HEADER_GITHUB_REQUEST_ID: &str = "X-GitHub-Request-Id";
@@ -68,26 +69,34 @@ impl Transport {
         let attempts = self.options.retry_max.saturating_add(1);
 
         for attempt in 0..attempts {
-            match builder.try_clone() {
-                Some(cloned) => match cloned.send().await {
-                    Ok(resp) => {
-                        if should_retry_status(resp.status()) && attempt + 1 < attempts {
-                            backoff(attempt, self.options.retry_wait_max, Some(&resp)).await;
-                            continue;
-                        }
-                        return Ok(resp);
+            let Some(request) = builder.try_clone() else {
+                return builder.send().await.map_err(Into::into);
+            };
+
+            match request.send().await {
+                Ok(response) => {
+                    if !should_retry_status(response.status()) || attempt + 1 >= attempts {
+                        return Ok(response);
                     }
-                    Err(err) => {
-                        last_err = Some(err.into());
-                        if attempt + 1 < attempts {
-                            backoff(attempt, self.options.retry_wait_max, None).await;
-                            continue;
-                        }
+
+                    let retry_after = retry_after_duration(&response);
+
+                    drain_retry_response(response).await;
+                    backoff(attempt, self.options.retry_wait_max, retry_after).await;
+                }
+
+                Err(err) => {
+                    last_err = Some(err.into());
+
+                    if attempt + 1 >= attempts {
+                        break;
                     }
-                },
-                None => return builder.send().await.map_err(Into::into),
+
+                    backoff(attempt, self.options.retry_wait_max, None).await;
+                }
             }
         }
+
         Err(last_err.unwrap_or_else(|| Error::message("request failed")))
     }
 }
@@ -123,15 +132,31 @@ fn retry_after_duration(response: &Response) -> Option<Duration> {
     Duration::try_from(retry_at - now).ok()
 }
 
+async fn drain_retry_response(mut response: Response) {
+    let mut bytes_read = 0;
+
+    while bytes_read < RETRY_RESPONSE_DRAIN_LIMIT {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes_read += chunk.len();
+            }
+
+            Ok(None) | Err(_) => {
+                break;
+            }
+        }
+    }
+}
+
 fn backoff_duration(attempt: u32, cap: Duration) -> Duration {
     let multiplier = 2u32.saturating_pow(attempt);
 
     DEFAULT_RETRY_WAIT_MIN.saturating_mul(multiplier).min(cap)
 }
 
-async fn backoff(attempt: u32, cap: Duration, response: Option<&Response>) {
-    let delay = match response.and_then(retry_after_duration) {
-        Some(retry_after) => retry_after,
+async fn backoff(attempt: u32, cap: Duration, retry_after: Option<Duration>) {
+    let delay = match retry_after {
+        Some(delay) => delay,
         None => backoff_duration(attempt, cap),
     };
 
@@ -164,22 +189,25 @@ pub(crate) async fn read_error_body(
     let status = resp.status();
     let activity_id = header(&resp, HEADER_ACTIONS_ACTIVITY_ID);
     let github_request_id = header(&resp, HEADER_GITHUB_REQUEST_ID);
+
     let content_type = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+
     let body = resp.bytes().await.unwrap_or_default();
-    crate::error::map_response_error(
+
+    map_response_error(ResponseErrorContext {
         status,
         activity_id,
         github_request_id,
-        content_type.as_deref(),
-        &body,
+        content_type: content_type.as_deref(),
+        body: &body,
         method,
         url,
         seed,
-    )
+    })
 }
 
 pub(crate) async fn expect_status(
@@ -203,7 +231,26 @@ fn header(resp: &Response, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
     use super::*;
+    use wiremock::{
+        matchers::{body_json, method, path},
+        Mock, MockServer, Request, ResponseTemplate,
+    };
+
+    fn test_transport(retry_max: u32) -> Transport {
+        let options = HttpOptions {
+            retry_max,
+            retry_wait_max: Duration::ZERO,
+            ..HttpOptions::default()
+        };
+
+        Transport::new(SystemInfo::default(), options).unwrap()
+    }
 
     #[test]
     fn retry_status_matches_upstream_policy() {
@@ -224,5 +271,93 @@ mod tests {
         assert_eq!(backoff_duration(1, cap), Duration::from_secs(2));
         assert_eq!(backoff_duration(2, cap), Duration::from_secs(4));
         assert_eq!(backoff_duration(3, cap), Duration::from_secs(8));
+    }
+
+    #[tokio::test]
+    async fn retries_server_errors_until_success() {
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let responder_calls = Arc::clone(&calls);
+
+        Mock::given(method("GET"))
+            .and(path("/retry"))
+            .respond_with(move |_request: &Request| {
+                let attempt = responder_calls.fetch_add(1, Ordering::SeqCst);
+
+                match attempt {
+                    0 | 1 => ResponseTemplate::new(500).set_body_string("temporary failure"),
+                    _ => ResponseTemplate::new(200),
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let transport = test_transport(4);
+        let request = transport.http.get(format!("{}/retry", server.uri()));
+
+        let response = transport.send(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_max_zero_makes_one_attempt() {
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let responder_calls = Arc::clone(&calls);
+
+        Mock::given(method("GET"))
+            .and(path("/retry"))
+            .respond_with(move |_request: &Request| {
+                responder_calls.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(500)
+            })
+            .mount(&server)
+            .await;
+
+        let transport = test_transport(0);
+        let request = transport.http.get(format!("{}/retry", server.uri()));
+
+        let response = transport.send(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retries_replay_json_request_body() {
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let responder_calls = Arc::clone(&calls);
+
+        let payload = serde_json::json!({
+            "runnerRequestId": 501
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/retry"))
+            .and(body_json(&payload))
+            .respond_with(move |_request: &Request| {
+                let attempt = responder_calls.fetch_add(1, Ordering::SeqCst);
+
+                match attempt {
+                    0 => ResponseTemplate::new(500),
+                    _ => ResponseTemplate::new(200),
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let transport = test_transport(1);
+        let request = transport
+            .http
+            .post(format!("{}/retry", server.uri()))
+            .json(&payload);
+
+        let response = transport.send(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

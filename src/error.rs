@@ -118,23 +118,39 @@ impl fmt::Display for ActionsException {
     }
 }
 
-pub(crate) fn map_response_error(
-    status: StatusCode,
-    activity_id: Option<String>,
-    github_request_id: Option<String>,
-    content_type: Option<&str>,
-    body: &[u8],
-    method: &str,
-    url: &str,
-    seed: Option<Kind>,
-) -> Error {
+pub(crate) struct ResponseErrorContext<'a> {
+    pub status: StatusCode,
+    pub activity_id: Option<String>,
+    pub github_request_id: Option<String>,
+    pub content_type: Option<&'a str>,
+    pub body: &'a [u8],
+    pub method: &'a str,
+    pub url: &'a str,
+    pub seed: Option<Kind>,
+}
+
+pub(crate) fn map_response_error(context: ResponseErrorContext<'_>) -> Error {
+    let ResponseErrorContext {
+        status,
+        activity_id,
+        github_request_id,
+        content_type,
+        body,
+        method,
+        url,
+        seed,
+    } = context;
+
     let mut message = format!("request {method} {url} failed (status={status:?}");
+
     if let Some(id) = &activity_id {
         message.push_str(&format!(", activity_id={id:?}"));
     }
+
     if let Some(id) = &github_request_id {
         message.push_str(&format!(", github_request_id={id:?}"));
     }
+
     message.push(')');
 
     let inner = if body.is_empty() {
@@ -206,16 +222,16 @@ mod tests {
 
     #[test]
     fn known_exception_preserves_specific_and_http_kinds() {
-        let err = map_response_error(
-            StatusCode::CONFLICT,
-            None,
-            None,
-            Some("application/json"),
-            br#"{"typeName":"AgentExistsException","message":"runner already exists"}"#,
-            "POST",
-            "https://example.test",
-            None,
-        );
+        let err = map_response_error(ResponseErrorContext {
+            status: StatusCode::CONFLICT,
+            activity_id: None,
+            github_request_id: None,
+            content_type: Some("application/json"),
+            body: br#"{"typeName":"AgentExistsException","message":"runner already exists"}"#,
+            method: "POST",
+            url: "https://example.test",
+            seed: None,
+        });
 
         assert!(err.has_kind(Kind::RunnerExists));
         assert!(err.has_kind(Kind::Conflict));
@@ -223,16 +239,16 @@ mod tests {
 
     #[test]
     fn token_expired_preserves_token_and_http_kinds() {
-        let err = map_response_error(
-            StatusCode::UNAUTHORIZED,
-            None,
-            None,
-            Some("text/plain"),
-            b"token expired",
-            "GET",
-            "https://example.test",
-            Some(Kind::MessageQueueTokenExpired),
-        );
+        let err = map_response_error(ResponseErrorContext {
+            status: StatusCode::UNAUTHORIZED,
+            activity_id: None,
+            github_request_id: None,
+            content_type: Some("text/plain"),
+            body: b"token expired",
+            method: "GET",
+            url: "https://example.test",
+            seed: Some(Kind::MessageQueueTokenExpired),
+        });
 
         assert!(err.has_kind(Kind::MessageQueueTokenExpired));
         assert!(err.has_kind(Kind::Unauthorized));

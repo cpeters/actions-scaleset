@@ -18,19 +18,10 @@ use crate::types::{
     JobCompleted, JobStarted, RunnerScaleSetMessage, RunnerScaleSetSession, RunnerScaleSetStatistic,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ListenerConfig {
     pub scale_set_id: i32,
     pub max_runners: i32,
-}
-
-impl Default for ListenerConfig {
-    fn default() -> Self {
-        Self {
-            scale_set_id: 0,
-            max_runners: 0,
-        }
-    }
 }
 
 impl ListenerConfig {
