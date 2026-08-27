@@ -149,3 +149,7 @@ listener.session_client().close().await?;
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+This project contains code adapted from GitHub's
+[`actions/scaleset`](https://github.com/actions/scaleset); see
+[Third-Party Notices](THIRD_PARTY_NOTICES.md) for attribution.
