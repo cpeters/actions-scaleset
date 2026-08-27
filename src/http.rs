@@ -7,6 +7,7 @@ use crate::types::SystemInfo;
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(300);
 const DEFAULT_RETRY_MAX: u32 = 4;
+const DEFAULT_RETRY_WAIT_MIN: Duration = Duration::from_secs(1);
 const DEFAULT_RETRY_WAIT_MAX: Duration = Duration::from_secs(30);
 const DEFAULT_DANGER_ACCEPT_INVALID_CERTS: bool = false;
 
@@ -99,9 +100,14 @@ fn should_retry_status(status: StatusCode) -> bool {
     }
 }
 
+fn backoff_duration(attempt: u32, cap: Duration) -> Duration {
+    let multiplier = 2u32.saturating_pow(attempt);
+
+    DEFAULT_RETRY_WAIT_MIN.saturating_mul(multiplier).min(cap)
+}
+
 async fn backoff(attempt: u32, cap: Duration) {
-    let millis = (200u64 * 2u64.saturating_pow(attempt)).min(cap.as_millis() as u64);
-    tokio::time::sleep(Duration::from_millis(millis)).await;
+    tokio::time::sleep(backoff_duration(attempt, cap)).await;
 }
 
 pub(crate) fn user_agent_string(info: &SystemInfo) -> String {
@@ -180,5 +186,15 @@ mod tests {
         assert!(!should_retry_status(StatusCode::NOT_IMPLEMENTED));
         assert!(!should_retry_status(StatusCode::REQUEST_TIMEOUT));
         assert!(!should_retry_status(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn backoff_matches_upstream_defaults() {
+        let cap = Duration::from_secs(30);
+
+        assert_eq!(backoff_duration(0, cap), Duration::from_secs(1));
+        assert_eq!(backoff_duration(1, cap), Duration::from_secs(2));
+        assert_eq!(backoff_duration(2, cap), Duration::from_secs(4));
+        assert_eq!(backoff_duration(3, cap), Duration::from_secs(8));
     }
 }
