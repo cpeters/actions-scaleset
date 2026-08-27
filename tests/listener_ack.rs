@@ -1,10 +1,11 @@
 use std::sync::{Arc, Mutex};
 
 use actions_scaleset::{
-    Error, JobAvailable, JobCompleted, JobMessageBase, JobStarted, Listener, ListenerConfig,
+    Error, JobAvailable, JobCompleted, JobMessageBase, JobStarted, Kind, Listener, ListenerConfig,
     Result, RunnerScaleSetMessage, RunnerScaleSetSession, RunnerScaleSetStatistic, Scaler,
     SessionApi,
 };
+
 use async_trait::async_trait;
 use uuid::Uuid;
 
@@ -12,6 +13,7 @@ use uuid::Uuid;
 struct Trace {
     calls: Mutex<Vec<String>>,
     fail_acquire: bool,
+    fail_acquire_typed: bool,
     fail_desired: bool,
 }
 
@@ -45,9 +47,21 @@ impl SessionApi for MockSession {
             .lock()
             .unwrap()
             .push(format!("acquire:{request_ids:?}"));
+
+        if self.trace.fail_acquire_typed {
+            return Err(Error::Http {
+                status: 409,
+                message: "conflict".to_string(),
+                activity_id: None,
+                github_request_id: None,
+                source: Some(Box::new(Error::from(Kind::Conflict))),
+            });
+        }
+
         if self.trace.fail_acquire {
             return Err(Error::message("acquire failed"));
         }
+
         Ok(request_ids.to_vec())
     }
 
@@ -315,4 +329,34 @@ async fn run_until_interrupts_pending_get_message() {
         .await
         .expect("listener did not stop while get_message was pending")
         .unwrap();
+}
+
+#[tokio::test]
+async fn listener_preserves_typed_session_error_context() {
+    let trace = Arc::new(Trace {
+        fail_acquire_typed: true,
+        ..Default::default()
+    });
+
+    let listener = listener(trace.clone());
+
+    let scaler = RecordingScaler {
+        trace: trace.clone(),
+    };
+
+    let err = listener
+        .handle_one(&scaler, sample_message())
+        .await
+        .unwrap_err();
+
+    assert!(err.has_kind(Kind::Conflict));
+    assert_eq!(err.status(), Some(409));
+
+    assert!(err.to_string().contains("failed to acquire available jobs"));
+
+    let calls = trace.calls.lock().unwrap().clone();
+
+    assert_eq!(calls, vec!["acquire:[501]".to_string()]);
+
+    assert!(!calls.iter().any(|call| call.starts_with("delete:")));
 }
