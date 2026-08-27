@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use reqwest::{Client as HttpClient, RequestBuilder, Response, StatusCode};
+use reqwest::{header::RETRY_AFTER, Client as HttpClient, RequestBuilder, Response, StatusCode};
+use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 
 use crate::error::{Error, Kind, Result};
 use crate::types::SystemInfo;
@@ -71,7 +72,7 @@ impl Transport {
                 Some(cloned) => match cloned.send().await {
                     Ok(resp) => {
                         if should_retry_status(resp.status()) && attempt + 1 < attempts {
-                            backoff(attempt, self.options.retry_wait_max).await;
+                            backoff(attempt, self.options.retry_wait_max, Some(&resp)).await;
                             continue;
                         }
                         return Ok(resp);
@@ -79,7 +80,7 @@ impl Transport {
                     Err(err) => {
                         last_err = Some(err.into());
                         if attempt + 1 < attempts {
-                            backoff(attempt, self.options.retry_wait_max).await;
+                            backoff(attempt, self.options.retry_wait_max, None).await;
                             continue;
                         }
                     }
@@ -100,14 +101,41 @@ fn should_retry_status(status: StatusCode) -> bool {
     }
 }
 
+fn retry_after_duration(response: &Response) -> Option<Duration> {
+    match response.status() {
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => {}
+        _ => return None,
+    }
+
+    let value = response.headers().get(RETRY_AFTER)?.to_str().ok()?;
+
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+
+    let retry_at = OffsetDateTime::parse(value, &Rfc2822).ok()?;
+    let now = OffsetDateTime::now_utc();
+
+    if retry_at <= now {
+        return Some(Duration::ZERO);
+    }
+
+    Duration::try_from(retry_at - now).ok()
+}
+
 fn backoff_duration(attempt: u32, cap: Duration) -> Duration {
     let multiplier = 2u32.saturating_pow(attempt);
 
     DEFAULT_RETRY_WAIT_MIN.saturating_mul(multiplier).min(cap)
 }
 
-async fn backoff(attempt: u32, cap: Duration) {
-    tokio::time::sleep(backoff_duration(attempt, cap)).await;
+async fn backoff(attempt: u32, cap: Duration, response: Option<&Response>) {
+    let delay = match response.and_then(retry_after_duration) {
+        Some(retry_after) => retry_after,
+        None => backoff_duration(attempt, cap),
+    };
+
+    tokio::time::sleep(delay).await;
 }
 
 pub(crate) fn user_agent_string(info: &SystemInfo) -> String {
