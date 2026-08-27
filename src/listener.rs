@@ -103,6 +103,16 @@ impl<S: SessionApi> Listener<S> {
         self
     }
 
+    /// Returns the underlying session implementation.
+    ///
+    /// This is useful for session-specific lifecycle operations after the listener
+    /// has stopped. For example, when `S` is a `MessageSessionClient`, callers can
+    /// explicitly close the server-side GitHub message session during graceful
+    /// shutdown.
+    pub fn session_client(&self) -> &S {
+        &self.session
+    }
+
     pub fn set_max_runners(&self, count: i32) -> Result<()> {
         if count < 0 {
             return Err(Error::message("maxRunners must be >= 0"));

@@ -114,7 +114,12 @@ let listener = Listener::new(
     },
 )?;
 
-// listener.run(&my_scaler).await?;
+// Run the listener until your application begins graceful shutdown.
+// listener.run_until(&my_scaler, stop_rx).await?;
+
+// After polling has stopped, explicitly close the GitHub message session.
+listener.session_client().close().await?;
+
 # Ok(())
 # }
 ```
@@ -124,6 +129,23 @@ counts. Responses are capped (~50 messages) and jobs may be reassigned.
 
 JIT configs are secrets. Prefer a GitHub App over a PAT.
 
+### Message-session lifecycle
+
+A `MessageSessionClient` owns a server-side GitHub message session. Applications
+should explicitly call `MessageSessionClient::close()` during graceful shutdown
+after message polling has stopped.
+
+Session cleanup cannot safely happen automatically in `Drop`: deleting the
+server-side session requires an asynchronous HTTP request, while Rust's `Drop`
+trait is synchronous.
+
+When using `Listener`, access the underlying session through
+`Listener::session_client()` after the listener has stopped:
+
+```rust
+listener.session_client().close().await?;
+```
+
 ## License
 
-MIT, same as the upstream Go client.
+Licensed under the [MIT License](LICENSE).

@@ -26,6 +26,15 @@ pub trait SessionApi: Send + Sync {
     async fn session(&self) -> RunnerScaleSetSession;
 }
 
+/// An active GitHub Actions Runner Scale Set message session.
+///
+/// A message session represents server-side state in GitHub. Call
+/// [`Self::close`] during graceful shutdown when the session is no longer
+/// needed.
+///
+/// Cleanup is explicit because closing a session requires an asynchronous HTTP
+/// request. Rust's [`Drop`] trait is synchronous, so this type cannot reliably
+/// perform that network operation automatically when it is dropped.
 pub struct MessageSessionClient {
     inner: Client,
     transport: Transport,
@@ -56,8 +65,14 @@ impl MessageSessionClient {
         Ok(client)
     }
 
+    /// Deletes the server-side GitHub message session.
+    ///
+    /// Call this during graceful shutdown after message polling has stopped.
+    /// Because deletion requires an asynchronous HTTP request, session cleanup is
+    /// not performed automatically from `Drop`.
     pub async fn close(&self) -> Result<()> {
         let session = self.current_session().await;
+
         self.delete_session(session.session_id).await
     }
 
