@@ -38,6 +38,13 @@ pub enum Error {
         source: Box<Error>,
     },
 
+    #[error("{message}: {source}")]
+    Context {
+        message: String,
+        #[source]
+        source: Box<Error>,
+    },
+
     #[error("{0}")]
     Message(String),
 
@@ -74,6 +81,13 @@ impl Error {
         Self::Message(msg.into())
     }
 
+    pub fn context(self, message: impl Into<String>) -> Self {
+        Self::Context {
+            message: message.into(),
+            source: Box::new(self),
+        }
+    }
+
     pub fn is_message_queue_token_expired(&self) -> bool {
         self.has_kind(Kind::MessageQueueTokenExpired)
     }
@@ -81,11 +95,19 @@ impl Error {
     pub fn has_kind(&self, kind: Kind) -> bool {
         match self {
             Self::Kind(k) => *k == kind,
-            Self::Classified { kind: k, source } => *k == kind || source.has_kind(kind),
+
+            Self::Classified {
+                kind: classified_kind,
+                source,
+            } => *classified_kind == kind || source.has_kind(kind),
+
+            Self::Context { source, .. } => source.has_kind(kind),
+
             Self::Http {
-                source: Some(inner),
+                source: Some(source),
                 ..
-            } => inner.has_kind(kind),
+            } => source.has_kind(kind),
+
             _ => false,
         }
     }
@@ -93,6 +115,9 @@ impl Error {
     pub fn status(&self) -> Option<u16> {
         match self {
             Self::Http { status, .. } => Some(*status),
+
+            Self::Context { source, .. } | Self::Classified { source, .. } => source.status(),
+
             _ => None,
         }
     }
@@ -252,5 +277,26 @@ mod tests {
 
         assert!(err.has_kind(Kind::MessageQueueTokenExpired));
         assert!(err.has_kind(Kind::Unauthorized));
+    }
+
+    #[test]
+    fn context_preserves_error_classification_and_status() {
+        let err = map_response_error(ResponseErrorContext {
+            status: StatusCode::CONFLICT,
+            activity_id: None,
+            github_request_id: None,
+            content_type: Some("application/json"),
+            body: br#"{"typeName":"AgentExistsException","message":"runner already exists"}"#,
+            method: "POST",
+            url: "https://example.test",
+            seed: None,
+        })
+        .context("failed to acquire jobs");
+
+        assert!(err.has_kind(Kind::RunnerExists));
+        assert!(err.has_kind(Kind::Conflict));
+        assert_eq!(err.status(), Some(StatusCode::CONFLICT.as_u16()));
+
+        assert!(err.to_string().starts_with("failed to acquire jobs:"));
     }
 }

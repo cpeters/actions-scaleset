@@ -5,7 +5,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::client::Client;
-use crate::error::{Error, Kind, Result};
+use crate::error::{Kind, Result};
 use crate::http::{expect_status, read_error_body, Transport};
 use crate::types::{
     parse_runner_scale_set_message, AcquireJobsResponse, RunnerScaleSetMessage,
@@ -301,44 +301,65 @@ impl SessionApi for MessageSessionClient {
         max_capacity: i32,
     ) -> Result<Option<RunnerScaleSetMessage>> {
         let session = self.current_session().await;
+
         match self
             .get_message_once(&session, last_message_id, max_capacity)
             .await
         {
-            Ok(v) => Ok(v),
+            Ok(message) => Ok(message),
+
             Err(err) if err.is_message_queue_token_expired() => {
-                self.refresh_session(&session).await?;
+                self.refresh_session(&session)
+                    .await
+                    .map_err(|err| err.context("failed to refresh message session"))?;
+
                 let session = self.current_session().await;
+
                 self.get_message_once(&session, last_message_id, max_capacity)
                     .await
             }
-            Err(err) => Err(Error::message(format!("failed to get next message: {err}"))),
+
+            Err(err) => Err(err.context("failed to get next message")),
         }
     }
 
     async fn delete_message(&self, message_id: i32) -> Result<()> {
         let session = self.current_session().await;
+
         match self.delete_message_once(&session, message_id).await {
             Ok(()) => Ok(()),
+
             Err(err) if err.is_message_queue_token_expired() => {
-                self.refresh_session(&session).await?;
+                self.refresh_session(&session)
+                    .await
+                    .map_err(|err| err.context("failed to refresh message session"))?;
+
                 let session = self.current_session().await;
+
                 self.delete_message_once(&session, message_id).await
             }
-            Err(err) => Err(Error::message(format!("failed to delete message: {err}"))),
+
+            Err(err) => Err(err.context("failed to delete message")),
         }
     }
 
     async fn acquire_jobs(&self, request_ids: &[i64]) -> Result<Vec<i64>> {
         let session = self.current_session().await;
+
         match self.acquire_jobs_once(&session, request_ids).await {
-            Ok(v) => Ok(v),
+            Ok(ids) => Ok(ids),
+
             Err(err) if err.is_message_queue_token_expired() => {
-                self.refresh_session(&session).await?;
+                self.refresh_session(&session)
+                    .await
+                    .map_err(|err| err.context("failed to refresh message session"))?;
+
                 let session = self.current_session().await;
+
                 self.acquire_jobs_once(&session, request_ids).await
             }
-            Err(err) => Err(Error::message(format!("failed to acquire jobs: {err}"))),
+
+            Err(err) => Err(err.context("failed to acquire jobs")),
         }
     }
 
