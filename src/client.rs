@@ -549,6 +549,8 @@ mod tests {
         Mock, MockServer, Request, ResponseTemplate,
     };
 
+    const TEST_APP_PRIVATE_KEY: &str = include_str!("../tests/fixtures/app.pem");
+
     #[derive(Serialize)]
     struct TestClaims {
         exp: i64,
@@ -577,6 +579,25 @@ mod tests {
             HttpOptions {
                 retry_max: 1,
                 retry_wait_max: std::time::Duration::ZERO,
+                ..HttpOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn test_app_client(server: &MockServer) -> Client {
+        Client::with_github_app(
+            GitHubAppClientConfig {
+                github_config_url: format!("{}/octo-org", server.uri()),
+                github_app_auth: GitHubAppAuth {
+                    client_id: "Iv1.test-client".to_string(),
+                    installation_id: 12345,
+                    private_key_pem: TEST_APP_PRIVATE_KEY.to_string(),
+                },
+                system_info: SystemInfo::default(),
+            },
+            HttpOptions {
+                retry_max: 0,
                 ..HttpOptions::default()
             },
         )
@@ -640,8 +661,6 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
 
-        // A second request should use the cached admin token rather
-        // than fetching another registration/admin connection.
         let cached = client.admin_authorization().await.unwrap();
 
         assert_eq!(cached, authorization);
@@ -656,5 +675,80 @@ mod tests {
     #[tokio::test]
     async fn admin_connection_retries_forbidden() {
         assert_admin_connection_retries(StatusCode::FORBIDDEN).await;
+    }
+
+    #[tokio::test]
+    async fn github_app_auth_completes_full_token_exchange() {
+        let server = MockServer::start().await;
+        let admin_token = test_admin_jwt();
+
+        Mock::given(method("POST"))
+            .and(path("/api/v3/app/installations/12345/access_tokens"))
+            .respond_with(|request: &Request| {
+                let authorization = request
+                    .headers
+                    .get("authorization")
+                    .expect("GitHub App request missing Authorization header")
+                    .to_str()
+                    .expect("Authorization header is not valid UTF-8");
+
+                assert!(
+                    authorization.starts_with("Bearer "),
+                    "GitHub App request should use Bearer JWT"
+                );
+
+                let jwt = authorization.strip_prefix("Bearer ").unwrap();
+
+                assert_eq!(
+                    jwt.split('.').count(),
+                    3,
+                    "GitHub App authorization should contain a JWT"
+                );
+
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                    "token": "installation-token",
+                    "expires_at": "2099-01-01T00:00:00Z"
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(
+                "/api/v3/orgs/octo-org/actions/runners/registration-token",
+            ))
+            .and(header("authorization", "Bearer installation-token"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "token": "registration-token"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/v3/actions/runner-registration"))
+            .and(header("authorization", "RemoteAuth registration-token"))
+            .and(body_json(serde_json::json!({
+                "url": format!("{}/octo-org", server.uri()),
+                "runner_event": "register"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": server.uri(),
+                "token": admin_token
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_app_client(&server);
+
+        let authorization = client.admin_authorization().await.unwrap();
+
+        assert_eq!(authorization, format!("Bearer {admin_token}"));
+
+        let cached = client.admin_authorization().await.unwrap();
+
+        assert_eq!(cached, authorization);
     }
 }
