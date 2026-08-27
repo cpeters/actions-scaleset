@@ -280,3 +280,202 @@ impl SessionApi for MessageSessionClient {
         self.current_session().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use time::{Duration, OffsetDateTime};
+    use wiremock::{
+        matchers::{header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    use crate::client::{AdminToken, PersonalAccessTokenConfig};
+    use crate::http::HttpOptions;
+    use crate::types::SystemInfo;
+
+    const SCALE_SET_ID: i32 = 42;
+
+    async fn test_session_client(
+        server: &MockServer,
+        session: RunnerScaleSetSession,
+    ) -> MessageSessionClient {
+        let client = Client::with_personal_access_token(
+            PersonalAccessTokenConfig {
+                github_config_url: format!("{}/octo-org", server.uri()),
+                personal_access_token: "github-pat".to_string(),
+                system_info: SystemInfo::default(),
+            },
+            HttpOptions {
+                retry_max: 0,
+                ..HttpOptions::default()
+            },
+        )
+        .unwrap();
+
+        *client.inner.admin.write().await = AdminToken {
+            token: "admin-token".to_string(),
+            authorization_header: "Bearer admin-token".to_string(),
+            expires_at: Some(OffsetDateTime::now_utc() + Duration::hours(1)),
+            url: server.uri(),
+        };
+
+        MessageSessionClient {
+            inner: client,
+            scale_set_id: SCALE_SET_ID,
+            owner: "test-owner".to_string(),
+            session: RwLock::new(session),
+            refresh: Mutex::new(()),
+        }
+    }
+
+    fn initial_session(server: &MockServer, session_id: Uuid) -> RunnerScaleSetSession {
+        RunnerScaleSetSession {
+            session_id,
+            owner_name: "test-owner".to_string(),
+            message_queue_url: format!("{}/queue", server.uri()),
+            message_queue_access_token: "expired-token".to_string(),
+            ..RunnerScaleSetSession::default()
+        }
+    }
+
+    fn refreshed_session(server: &MockServer, session_id: Uuid) -> RunnerScaleSetSession {
+        RunnerScaleSetSession {
+            session_id,
+            owner_name: "test-owner".to_string(),
+            message_queue_url: format!("{}/queue", server.uri()),
+            message_queue_access_token: "fresh-token".to_string(),
+            ..RunnerScaleSetSession::default()
+        }
+    }
+
+    async fn mock_session_refresh(server: &MockServer, session: &RunnerScaleSetSession) {
+        let refresh_path = format!(
+            "/{SCALE_SET_ENDPOINT}/{SCALE_SET_ID}/sessions/{}",
+            session.session_id
+        );
+
+        Mock::given(method("PATCH"))
+            .and(path(refresh_path))
+            .and(header("authorization", "Bearer admin-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(session))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn get_message_refreshes_expired_session_and_retries() {
+        let server = MockServer::start().await;
+        let session_id = Uuid::new_v4();
+
+        let initial = initial_session(&server, session_id);
+        let refreshed = refreshed_session(&server, session_id);
+
+        mock_session_refresh(&server, &refreshed).await;
+
+        Mock::given(method("GET"))
+            .and(path("/queue"))
+            .and(header("authorization", "Bearer expired-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/queue"))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_session_client(&server, initial).await;
+
+        let message = client.get_message(0, 8).await.unwrap();
+
+        assert!(message.is_none());
+
+        let current = client.current_session().await;
+        assert_eq!(current.session_id, session_id);
+        assert_eq!(current.message_queue_access_token, "fresh-token");
+    }
+
+    #[tokio::test]
+    async fn delete_message_refreshes_expired_session_and_retries() {
+        let server = MockServer::start().await;
+        let session_id = Uuid::new_v4();
+
+        let initial = initial_session(&server, session_id);
+        let refreshed = refreshed_session(&server, session_id);
+
+        mock_session_refresh(&server, &refreshed).await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/queue/99"))
+            .and(header("authorization", "Bearer expired-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/queue/99"))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_session_client(&server, initial).await;
+
+        client.delete_message(99).await.unwrap();
+
+        let current = client.current_session().await;
+        assert_eq!(current.session_id, session_id);
+        assert_eq!(current.message_queue_access_token, "fresh-token");
+    }
+
+    #[tokio::test]
+    async fn acquire_jobs_refreshes_expired_session_and_retries() {
+        let server = MockServer::start().await;
+        let session_id = Uuid::new_v4();
+
+        let initial = initial_session(&server, session_id);
+        let refreshed = refreshed_session(&server, session_id);
+
+        mock_session_refresh(&server, &refreshed).await;
+
+        let acquire_path = format!("/{SCALE_SET_ENDPOINT}/{SCALE_SET_ID}/acquirejobs");
+
+        Mock::given(method("POST"))
+            .and(path(acquire_path.clone()))
+            .and(header("authorization", "Bearer expired-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(acquire_path))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 2,
+                "value": [501, 502]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_session_client(&server, initial).await;
+
+        let acquired = client.acquire_jobs(&[501, 502]).await.unwrap();
+
+        assert_eq!(acquired, vec![501, 502]);
+
+        let current = client.current_session().await;
+        assert_eq!(current.session_id, session_id);
+        assert_eq!(current.message_queue_access_token, "fresh-token");
+    }
+}
