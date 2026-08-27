@@ -278,6 +278,7 @@ pub(crate) struct RunnerScaleSetsResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct AcquireJobsResponse {
     #[serde(default)]
+    #[allow(dead_code)]
     pub count: i32,
     #[serde(default)]
     pub value: Vec<i64>,

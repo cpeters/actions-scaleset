@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use actions_scaleset::{
-    AckMode, Error, JobAvailable, JobCompleted, JobMessageBase, JobStarted, Listener,
-    ListenerConfig, Result, RunnerScaleSetMessage, RunnerScaleSetSession, RunnerScaleSetStatistic,
-    Scaler, SessionApi,
+    Error, JobAvailable, JobCompleted, JobMessageBase, JobStarted, Listener, ListenerConfig,
+    Result, RunnerScaleSetMessage, RunnerScaleSetSession, RunnerScaleSetStatistic, Scaler,
+    SessionApi,
 };
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -121,19 +121,20 @@ fn sample_message() -> RunnerScaleSetMessage {
     }
 }
 
-fn listener(mode: AckMode, trace: Arc<Trace>) -> Listener<MockSession> {
+fn listener(trace: Arc<Trace>) -> Listener<MockSession> {
     let mut session = RunnerScaleSetSession {
         session_id: Uuid::new_v4(),
         owner_name: "test".into(),
         ..Default::default()
     };
+
     session.statistics = Some(RunnerScaleSetStatistic::default());
+
     Listener::new(
         MockSession { trace, session },
         ListenerConfig {
             scale_set_id: 1,
             max_runners: 8,
-            ack_mode: mode,
         },
     )
     .unwrap()
@@ -142,7 +143,7 @@ fn listener(mode: AckMode, trace: Arc<Trace>) -> Listener<MockSession> {
 #[test]
 fn set_max_runners_rejects_negative_values() {
     let trace = Arc::new(Trace::default());
-    let listener = listener(AckMode::AfterProcess, trace);
+    let listener = listener(trace);
 
     assert!(listener.set_max_runners(-1).is_err());
 }
@@ -150,7 +151,7 @@ fn set_max_runners_rejects_negative_values() {
 #[test]
 fn set_max_runners_accepts_non_negative_values() {
     let trace = Arc::new(Trace::default());
-    let listener = listener(AckMode::AfterProcess, trace);
+    let listener = listener(trace);
 
     assert!(listener.set_max_runners(0).is_ok());
     assert!(listener.set_max_runners(10).is_ok());
@@ -159,7 +160,7 @@ fn set_max_runners_accepts_non_negative_values() {
 #[tokio::test]
 async fn after_process_deletes_last() {
     let trace = Arc::new(Trace::default());
-    let listener = listener(AckMode::AfterProcess, trace.clone());
+    let listener = listener(trace.clone());
     let scaler = RecordingScaler {
         trace: trace.clone(),
     };
@@ -186,7 +187,7 @@ async fn after_process_skips_delete_when_acquire_fails() {
         ..Default::default()
     });
 
-    let listener = listener(AckMode::AfterProcess, trace.clone());
+    let listener = listener(trace.clone());
 
     let scaler = RecordingScaler {
         trace: trace.clone(),
@@ -211,7 +212,7 @@ async fn after_process_skips_delete_when_desired_count_fails() {
         fail_desired: true,
         ..Default::default()
     });
-    let listener = listener(AckMode::AfterProcess, trace.clone());
+    let listener = listener(trace.clone());
     let scaler = RecordingScaler {
         trace: trace.clone(),
     };
@@ -236,7 +237,7 @@ async fn after_process_skips_delete_when_desired_count_fails() {
 #[tokio::test]
 async fn missing_statistics_is_not_processed_or_acked() {
     let trace = Arc::new(Trace::default());
-    let listener = listener(AckMode::AfterProcess, trace.clone());
+    let listener = listener(trace.clone());
     let scaler = RecordingScaler {
         trace: trace.clone(),
     };
@@ -248,22 +249,6 @@ async fn missing_statistics_is_not_processed_or_acked() {
 
     assert!(err.to_string().contains("message statistics is nil"));
     assert!(trace.calls.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn go_compat_deletes_before_acquire() {
-    let trace = Arc::new(Trace {
-        fail_acquire: true,
-        ..Default::default()
-    });
-    let listener = listener(AckMode::GoCompat, trace.clone());
-    let scaler = RecordingScaler {
-        trace: trace.clone(),
-    };
-    let _ = listener.handle_one(&scaler, sample_message()).await;
-    let calls = trace.calls.lock().unwrap().clone();
-    assert_eq!(calls.first().map(String::as_str), Some("delete:99"));
-    assert!(calls.iter().any(|c| c.starts_with("acquire:")));
 }
 
 struct BlockingSession {
@@ -308,7 +293,6 @@ async fn run_until_interrupts_pending_get_message() {
         ListenerConfig {
             scale_set_id: 1,
             max_runners: 8,
-            ack_mode: AckMode::AfterProcess,
         },
     )
     .unwrap();

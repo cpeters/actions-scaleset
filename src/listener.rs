@@ -4,10 +4,6 @@
 //! scaler callbacks. If those later steps fail, the message is gone and will
 //! never be redelivered.
 //!
-//! This listener acknowledges **after** acquisition and handlers succeed
-//! (`AckMode::AfterProcess`, the default). `AckMode::GoCompat` is available
-//! only for reproducing the upstream bug.
-
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
@@ -22,22 +18,10 @@ use crate::types::{
     JobCompleted, JobStarted, RunnerScaleSetMessage, RunnerScaleSetSession, RunnerScaleSetStatistic,
 };
 
-/// When the queue item is deleted (acked).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AckMode {
-    /// Delete only after acquire + scaler handlers succeed.
-    #[default]
-    AfterProcess,
-    /// Upstream Go listener order: delete immediately, then process.
-    /// Unsafe — included so callers can A/B the bug.
-    GoCompat,
-}
-
 #[derive(Debug, Clone)]
 pub struct ListenerConfig {
     pub scale_set_id: i32,
     pub max_runners: i32,
-    pub ack_mode: AckMode,
 }
 
 impl Default for ListenerConfig {
@@ -45,7 +29,6 @@ impl Default for ListenerConfig {
         Self {
             scale_set_id: 0,
             max_runners: 0,
-            ack_mode: AckMode::AfterProcess,
         }
     }
 }
@@ -106,7 +89,6 @@ impl MetricsRecorder for NoopMetrics {
 pub struct Listener<S> {
     session: S,
     max_runners: AtomicI32,
-    ack_mode: AckMode,
     metrics: Arc<dyn MetricsRecorder>,
     latest_statistics: std::sync::Mutex<Option<RunnerScaleSetStatistic>>,
 }
@@ -117,7 +99,6 @@ impl<S: SessionApi> Listener<S> {
         Ok(Self {
             session,
             max_runners: AtomicI32::new(config.max_runners),
-            ack_mode: config.ack_mode,
             metrics: Arc::new(NoopMetrics),
             latest_statistics: std::sync::Mutex::new(None),
         })
@@ -246,22 +227,13 @@ impl<S: SessionApi> Listener<S> {
             self.store_statistics(stats)?;
         }
 
-        match self.ack_mode {
-            AckMode::GoCompat => {
-                self.session
-                    .delete_message(msg.message_id)
-                    .await
-                    .map_err(|e| Error::message(format!("failed to delete message: {e}")))?;
-                self.process(scaler, &msg).await?;
-            }
-            AckMode::AfterProcess => {
-                self.process(scaler, &msg).await?;
-                self.session
-                    .delete_message(msg.message_id)
-                    .await
-                    .map_err(|e| Error::message(format!("failed to delete message: {e}")))?;
-            }
-        }
+        self.process(scaler, &msg).await?;
+
+        self.session
+            .delete_message(msg.message_id)
+            .await
+            .map_err(|e| Error::message(format!("failed to delete message: {e}")))?;
+
         Ok(())
     }
 

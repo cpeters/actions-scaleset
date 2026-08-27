@@ -13,14 +13,13 @@ The API is in public preview. This crate mirrors the Go surface:
 - Automatic Actions-service admin token refresh
 - Session token refresh on `MessageQueueTokenExpired`
 
-## The listener fix
+## Message acknowledgment
 
-The Go `listener` package **deletes (acks) a message before** `AcquireJobs` and
-scaler callbacks. If those later steps fail, GitHub will not redeliver the
-message.
+The upstream Go `listener` package currently deletes (acks) a message before
+`AcquireJobs` and scaler callbacks. If those later steps fail, GitHub will not
+redeliver the message.
 
-This crate’s `Listener` acks **after** processing (`AckMode::AfterProcess`).
-`AckMode::GoCompat` exists only to reproduce the upstream order.
+This crate always acknowledges messages after successful processing.
 
 ```text
 Go (unsafe)                         Rust (default)
@@ -75,7 +74,6 @@ let listener = Listener::new(
     ListenerConfig {
         scale_set_id: set.id,
         max_runners: 32,
-        ack_mode: Default::default(),
     },
 )?;
 

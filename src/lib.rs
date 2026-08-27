@@ -37,7 +37,6 @@
 //! let listener = Listener::new(session, ListenerConfig {
 //!     scale_set_id: created.id,
 //!     max_runners: 32,
-//!     ack_mode: Default::default(),
 //! })?;
 //! listener.run(&my_scaler).await?;
 //! ```
@@ -57,7 +56,7 @@ pub use client::{Client, GitHubAppClientConfig, PersonalAccessTokenConfig};
 pub use config::{GitHubConfig, GitHubScope};
 pub use error::{Error, Kind, Result};
 pub use http::HttpOptions;
-pub use listener::{AckMode, Listener, ListenerConfig, MetricsRecorder, NoopMetrics, Scaler};
+pub use listener::{Listener, ListenerConfig, MetricsRecorder, NoopMetrics, Scaler};
 pub use session::{MessageSessionClient, SessionApi};
 pub use types::{
     parse_message_json, JobAssigned, JobAvailable, JobCompleted, JobMessageBase, JobStarted, Label,
